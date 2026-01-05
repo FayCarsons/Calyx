@@ -266,7 +266,11 @@ and row_extract : Ident.t -> (Ident.t * Term.value) list -> (Term.value, Error.t
 
 let singleton x = [ x ]
 
-let infer_toplevel program =
+let infer_toplevel
+  :  ast declaration list
+  -> (ast declaration list * Term.value Meta.gen, Error.t list) result
+  =
+  fun program ->
   let meta_gen = Meta.default () in
   print_endline "created meta_gen";
   let rec go
@@ -300,13 +304,16 @@ let infer_toplevel program =
     | record :: rest -> Result.map (List.cons record) (go rest)
     | [] -> Ok []
   in
-  Meta.handle meta_gen (fun () ->
-    Solve.Solution.handle meta_gen (fun () ->
-      let program, constraints = Solve.Constraints.handle $ fun () -> go program in
-      match program with
-      | Ok program ->
-        (match Solve.solve constraints with
-         | Solve.Stuck { errors; _ } when errors <> [] -> Error errors
-         | _ -> Ok program)
-      | Error es -> Error es))
+  let result, gen =
+    Meta.handle meta_gen (fun () ->
+      Solve.Solution.handle meta_gen (fun () ->
+        let program, constraints = Solve.Constraints.handle $ fun () -> go program in
+        match program with
+        | Ok program ->
+          (match Solve.solve constraints with
+           | Solve.Stuck { errors; _ } when errors <> [] -> Error errors
+           | _ -> Ok program)
+        | Error es -> Error es))
+  in
+  Result.map (Tuple.intoRev gen) result
 ;;

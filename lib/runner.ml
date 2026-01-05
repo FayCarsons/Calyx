@@ -10,11 +10,11 @@ let compile (module Backend : Codegen.S) path =
     print_endline "Desugared:";
     List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) desugared;
     print_newline ();
-    let* inferred = Checker.infer_toplevel desugared in
+    let* inferred, solutions = Checker.infer_toplevel desugared in
     print_endline "Inferred:";
     List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) inferred;
     print_newline ();
-    let zonked = List.map Zonk.zonk_toplevel inferred in
+    let zonked = List.map (Zonk.zonk_toplevel solutions) inferred in
     print_endline "Zonked:";
     List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) zonked;
     print_newline ();

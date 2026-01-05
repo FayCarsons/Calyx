@@ -46,14 +46,22 @@ and zonk_row : Term.row -> Term.row =
   }
 ;;
 
-let zonk_toplevel : Term.ast Term.declaration -> Term.ast Term.declaration = function
-  | Function { ident; typ; body } ->
-    let typ = zonk typ
-    and body = zonk body in
-    Function { ident; typ; body }
-  | Constant { ident; typ; body } ->
-    let typ = zonk typ
-    and body = zonk body in
-    Constant { ident; typ; body }
-  | record -> record
+let zonk_toplevel (m : Term.value Meta.gen) (ast : Term.ast Term.declaration)
+  : Term.ast Term.declaration
+  =
+  let open Term in
+  let zonked, _ =
+    Solve.Solution.handle m (fun () ->
+      match ast with
+      | Function { ident; typ; body } ->
+        let typ = zonk typ
+        and body = zonk body in
+        Function { ident; typ; body }
+      | Constant { ident; typ; body } ->
+        let typ = zonk typ
+        and body = zonk body in
+        Constant { ident; typ; body }
+      | record -> record)
+  in
+  zonked
 ;;

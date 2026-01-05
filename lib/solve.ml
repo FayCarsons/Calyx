@@ -26,9 +26,9 @@ module Solution = struct
   let solve : Meta.t -> Term.value -> unit = fun m t -> Effect.perform @@ Solve (m, t)
   let solution : Meta.t -> Term.value option = fun m -> Effect.perform @@ Solution m
 
-  let handle : Term.value Meta.gen -> (unit -> 'a) -> 'a = fun m f -> 
+  let handle : Term.value Meta.gen -> (unit -> 'a) -> 'a * Term.value Meta.gen = fun m f -> 
     let open Effect.Deep in
-    try f () 
+    let result = try f () 
       with 
       | effect (Solve (meta, solution)), k ->
           Meta.Solutions.add m.solutions meta (Some solution);
@@ -40,6 +40,8 @@ module Solution = struct
           (* print_endline "RERAISE IN SOLUTION"; *)
           (* Re-perform unhandled effects *)
           continue k (Effect.perform e)
+    in 
+    result, m
 end
 
 open Term

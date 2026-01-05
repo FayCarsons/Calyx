@@ -14,19 +14,6 @@ module type S = sig
   val standard_library : (Ident.t * Env.entry) list
   val map_types : (Ident.t * Ident.t) list
   val native_infix : Ident.t list
-  val var : string -> expr
-  val int : int -> expr
-  val uint : int -> expr
-  val float : float -> expr
-  val bool : bool -> expr
-  val app : expr -> expr -> expr
-  val let_ : Ident.t -> ty -> expr -> expr -> expr
-  val if_ : expr -> expr -> expr -> expr
-  val record : Ident.t -> (Ident.t * expr) list -> expr
-  val proj : expr -> Ident.t -> expr
-  val function_declaration : Ident.t -> expr -> expr -> expr -> declaration
-  val constant_declaration : Ident.t -> expr -> expr -> declaration
-  val emit : declaration list -> string
   val compile : Ir.declaration list -> string
 end
 
@@ -63,22 +50,11 @@ module WGSL : S = struct
     Printf.sprintf "let %s : %s = %s;\n%s" ident ty value body
   ;;
 
-  let if_ cond t f = Printf.sprintf "select(%s, %s, %s)" f t cond
-
   let record type_name fields =
     Printf.sprintf "%s(%s)" type_name (String.concat "," $ List.map snd fields)
   ;;
 
   let proj term field = Printf.sprintf "%s.%s" term field
-
-  let function_declaration name args return_type body =
-    Printf.sprintf "fn %s(%s) -> %s {\n%s\n}\n" name args return_type body
-  ;;
-
-  let constant_declaration name typ value =
-    Printf.sprintf "const %s: %s = %s;\n" name typ value
-  ;;
-
   let emit = String.concat "\n"
 
   let fix_typenames : string -> string =
@@ -109,10 +85,8 @@ module WGSL : S = struct
   (* Add return to the innermost expression in a function body *)
   let rec add_return_to_final_expr : Ir.t -> string = function
     | Let (ident, ty, value, body) ->
-      Printf.printf "DEBUG: add_return_to_final_expr Let binding '%s' has type: %s\n" ident (Ir.PrettyIR.ir_ty ty);
       (match ty with
        | TFunction _ ->
-         Printf.printf "DEBUG: Inlining function binding '%s' in function body\n" ident;
          (* WGSL doesn't support first-class functions, so we inline function bindings *)
          let inline_function_calls expr =
            let rec subst : Ir.t -> Ir.t = function
@@ -147,13 +121,8 @@ module WGSL : S = struct
       let right_expr = compile_expr right in
       Printf.sprintf "(%s %s %s)" left_expr op right_expr
     | Let (ident, ty_opt, value, body) ->
-      Printf.printf
-        "DEBUG: Let binding '%s' has type: %s\n"
-        ident
-        (Ir.PrettyIR.ir_ty ty_opt);
       (match ty_opt with
        | TFunction _ ->
-         Printf.printf "DEBUG: Inlining function binding '%s'\n" ident;
          (* WGSL doesn't support first-class functions, so we inline function bindings *)
          (* Replace all occurrences of `ident` in `body` with direct calls to `value` *)
          let inline_function_calls expr =
@@ -207,12 +176,12 @@ module WGSL : S = struct
       in
       let returns = compile_type returns in
       let body = add_return_to_final_expr body in
-      Printf.sprintf "fn %s(%s) -> %s {\n%s\n}" ident args returns body
+      Printf.sprintf "fn %s(%s) -> %s {\n  %s\n}" ident args returns body
     | Constant { ident; ty; value } ->
-      Printf.sprintf "const %s: %s = %s;" ident (compile_type ty) (compile_expr value)
+      Printf.sprintf "const %s: %s = %s;\n" ident (compile_type ty) (compile_expr value)
     | RecordType { ident; params = _; fields } ->
       let fields =
-        String.concat ",\n"
+        String.concat ",\n  "
         @@ List.map
              (fun (field, ty) -> Printf.sprintf "%s: %s" field (compile_type ty))
              fields

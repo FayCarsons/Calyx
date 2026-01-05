@@ -98,13 +98,13 @@ module PrettyIR = struct
         ) args |> String.concat ", " in 
         let returns = ir_ty returns in 
         let body = ir body in 
-        Printf.sprintf "fn %s(%s) -> %s {\n\t%s\n}\n" ident args returns body
+        Printf.sprintf "fn %s(%s) -> %s {\n\t%s\n}\n\n" ident args returns body
     | Constant { ident; ty; value } -> 
-        Printf.sprintf "let %s: %s = %s;\n" ident (ir_ty ty) (ir value)
+        Printf.sprintf "let %s: %s = %s;\n\n" ident (ir_ty ty) (ir value)
     | RecordType { ident; params; fields } -> 
         let params = List.map (fun (ident, ty) -> Printf.sprintf "(%s : %s)" ident (ir_ty ty)) params |> String.concat " " in
         let fields = (String.concat "\n" @@ List.map (fun (ident, ty) -> Printf.sprintf "%s : %s" ident (ir_ty ty)) fields) in
-        Printf.sprintf "data %s %s where\n%s\n" ident params fields 
+        Printf.sprintf "data %s %s where\n%s\n\n" ident params fields 
 end
 
 module Context = struct
@@ -248,31 +248,36 @@ and convert_lambda_to_function ?(name_prefix = "fn") pi_type first_param body =
 let convert : Term.ast Term.declaration list -> declaration list = fun decls ->
   let go = function 
   | Term.Function { ident; typ; body } ->
-    match body with
-    | `Ann (`Lam (x, lambda_body), _) | `Lam (x, lambda_body) ->
-      (* This is a function - use typ (the Pi type) for parameter types *)
-      let param_types = extract_pi_types typ in
-      let return_type = List.nth param_types (List.length param_types - 1) in
-      let arg_types = List.rev (List.tl (List.rev param_types)) in
-      
-      let args, converted_body = collect_lambda_params [x] lambda_body in 
-      let args = List.rev args in  (* Put back in correct order *)
-      let typed_args = List.combine args arg_types in
-      
-      Function { 
-        ident; 
-        args = typed_args; 
-        returns = return_type; 
-        body = converted_body; 
-      }
-    | other ->
+    (* This is a function - use typ (the Pi type) for parameter types *)
+    let param_types = extract_pi_types typ in
+    let return_type = List.nth param_types (List.length param_types - 1) in
+    let arg_types = List.rev (List.tl (List.rev param_types)) in
+    
+    let args, converted_body = collect_lambda_params [] body in 
+    let args = List.rev args in  (* Put back in correct order *)
+    let typed_args = List.combine args arg_types in
+    
+    Function { 
+      ident; 
+      args = typed_args; 
+      returns = return_type; 
+      body = converted_body; 
+    }
+  | Term.Constant { ident; typ; body } -> 
       (* This is a constant declaration *)
-      let converted_body = convert_expr other in
-      let converted_type = convert_type typ in
+      let value = convert_expr body in
+      let ty = convert_type typ in
       Constant {
         ident;
-        ty = converted_type;
-        value = converted_body;
+        ty ;
+        value ;
+      }
+  | Term.RecordDecl { ident; params; fields } -> 
+      let params = List.map (Tuple.second convert_type) params 
+      and fields = List.map (Tuple.second convert_type) fields 
+      in
+      RecordType {
+        ident; params; fields
       }
   in 
   let x, xs = Context.handle @@ fun () ->

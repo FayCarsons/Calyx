@@ -138,6 +138,16 @@ type 'a declaration =
       ; typ : 'a
       ; body : 'a
       }
+  | Constant of
+      { ident : Ident.t
+      ; typ : 'a
+      ; body : 'a
+      }
+  | RecordDecl of
+      { ident : Ident.t
+      ; params : (Ident.t * 'a) list
+      ; fields : (Ident.t * 'a) list
+      }
 (* | Extern of *)
 (*     { ident : Ident.t *)
 (*     ; typ : 'a *)
@@ -146,10 +156,20 @@ type 'a declaration =
 
 and platform = Javascript
 
-let desugar_toplevel (Function { ident; typ; body }) =
-  let typ = desugar typ
-  and body = desugar body in
-  Function { ident; typ; body }
+let desugar_toplevel = function
+  | Function { ident; typ; body } ->
+    let typ = desugar typ
+    and body = desugar body in
+    Function { ident; typ; body }
+  | Constant { ident; typ; body } ->
+    let typ = desugar typ
+    and body = desugar body in
+    Constant { ident; typ; body }
+  | RecordDecl { ident; params; fields } ->
+    let open Util in
+    let params = List.map (Tuple.second desugar) params
+    and fields = List.map (Tuple.second desugar) fields in
+    RecordDecl { ident; params; fields }
 ;;
 
 type 'a program =

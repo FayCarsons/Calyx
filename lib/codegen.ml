@@ -106,8 +106,17 @@ module WGSL : S = struct
         (String.concat ", " @@ List.map compile_type xs)
   ;;
 
+  (* Add return to the innermost expression in a function body *)
+  let rec add_return_to_final_expr : Ir.t -> string = function
+    | Let (ident, ty, value, body) ->
+      let wgsl_ty = compile_type ty in
+      let compiled_value = compile_expr value in
+      let compiled_body = add_return_to_final_expr body in
+      Printf.sprintf "let %s : %s = %s;\n%s" ident wgsl_ty compiled_value compiled_body
+    | other -> Printf.sprintf "return %s;" (compile_expr other)
+
   (* Compile an expression to WGSL *)
-  let rec compile_expr : Ir.t -> expr = function
+  and compile_expr : Ir.t -> expr = function
     | Var name -> var name
     | App (f, x) -> app f (String.concat ", " @@ List.map compile_expr x)
     | Infix (left, op, right) ->
@@ -169,11 +178,18 @@ module WGSL : S = struct
         @@ List.map (Fun.compose annotation (Tuple.second compile_type)) args
       in
       let returns = compile_type returns in
-      let body = compile_expr body in
+      let body = add_return_to_final_expr body in
       Printf.sprintf "fn %s(%s) -> %s {\n%s\n}" ident args returns body
     | Constant { ident; ty; value } ->
       Printf.sprintf "const %s: %s = %s;" ident (compile_type ty) (compile_expr value)
-    | RecordType _fields -> failwith "todo"
+    | RecordType { ident; params = _; fields } ->
+      let fields =
+        String.concat ",\n"
+        @@ List.map
+             (fun (field, ty) -> Printf.sprintf "%s: %s" field (compile_type ty))
+             fields
+      in
+      Printf.sprintf "struct %s {\n  %s\n}\n" ident fields
   ;;
 
   (* Main compilation entry point *)

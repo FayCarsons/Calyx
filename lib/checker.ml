@@ -285,6 +285,19 @@ let infer_toplevel program =
         let typ_ast = quote 0 typ_value in
         Result.map (List.cons (Function { ident; typ = typ_ast; body = body_ast }))
         $ go rest)
+    | Constant { ident; typ; body } :: rest ->
+      let* ty, value =
+        Result.map_error singleton
+        $
+        let vty = eval typ in
+        let* body_ast = check body vty in
+        Ok (vty, body_ast)
+      in
+      let value = eval value in
+      Env.local_typed ident ~ty ~value (fun () ->
+        let typ = quote 0 ty in
+        Result.map (List.cons (Constant { ident; typ; body })) $ go rest)
+    | record :: rest -> Result.map (List.cons record) (go rest)
     | [] -> Ok []
   in
   Meta.handle meta_gen (fun () ->

@@ -110,7 +110,19 @@ let rec ast : ast -> string = function
   | #base as otherwise -> base ast otherwise
 ;;
 
-let declaration (prn : 'a -> string) : 'a declaration -> string =
-  fun (Function { ident; typ; body }) ->
-  Printf.sprintf "def %s (%s) do\n%s\n" ident (prn typ) (prn body)
+let declaration (prn : 'a -> string) : 'a declaration -> string = function
+  | Function { ident; typ; body } ->
+    Printf.sprintf "def %s (%s) do\n%s\n\n" ident (prn typ) (prn body)
+  | Constant { ident; typ; body } ->
+    Printf.sprintf "const %s : %s = %s\n\n" ident (prn typ) (prn body)
+  | RecordDecl { ident; params; fields } ->
+    let params =
+      List.fold_left String.cat ""
+      @@ List.map (fun (ident, ty) -> Printf.sprintf "%s : %s" ident (prn ty)) params
+    in
+    let fields =
+      String.concat "\n\t"
+      @@ List.map (fun (field, ty) -> Printf.sprintf "%s : %s" field (prn ty)) fields
+    in
+    Printf.sprintf "data %s %s where\n\t%s\n\n" ident params fields
 ;;

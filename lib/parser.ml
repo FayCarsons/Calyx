@@ -348,7 +348,6 @@ let toplevel =
     let* return_type = expr in
     let* _ = symbol "do" in
     let* body = expr in
-    let* _ = symbol "end" in
     let typ =
       List.fold_right
         (fun (ident, ty) acc -> `Pi (ident, ty, acc))
@@ -367,9 +366,22 @@ let toplevel =
     let* typ = expr in
     let* _ = symbol "=" in
     let* body = expr in
-    pure $ Term.Function { ident; typ; body }
+    pure $ Term.Constant { ident; typ; body }
   in
-  fn_decl <|> constant_decl
+  let record_decl =
+    let field =
+      let* ident = any_ident in
+      let* _ = symbol ":" in
+      let* typ = expr in
+      pure (ident, typ)
+    in
+    let* _ = symbol "data" in
+    let* ident = ctor_ident in
+    let* _ = symbol "where" in
+    let* fields = sep_by1 (symbol ",") field in
+    pure $ Term.RecordDecl { ident; params = []; fields }
+  in
+  fn_decl <|> constant_decl <|> record_decl
 ;;
 
 let parse inp = parse_string ~consume:All (option () ws *> many toplevel) inp

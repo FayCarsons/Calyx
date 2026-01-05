@@ -46,9 +46,14 @@ and zonk_row : Term.row -> Term.row =
   }
 ;;
 
-let zonk_toplevel : Term.ast Term.declaration -> Term.ast Term.declaration =
-  fun (Function { ident; typ; body }) ->
-  let typ = zonk typ
-  and body = zonk body in
-  Function { ident; typ; body }
+let zonk_toplevel : Term.ast Term.declaration -> Term.ast Term.declaration = function
+  | Function { ident; typ; body } ->
+    let typ = zonk typ
+    and body = zonk body in
+    Function { ident; typ; body }
+  | Constant { ident; typ; body } ->
+    let typ = zonk typ
+    and body = zonk body in
+    Constant { ident; typ; body }
+  | record -> record
 ;;

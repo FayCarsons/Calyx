@@ -121,9 +121,14 @@ open Util
 
 
 let rec convert_expr : Term.ast -> t = function
-  | `Var v -> Var v
-  | `Lit literal -> Lit (convert_literal literal)
+  | `Var v -> 
+    print_endline "IR.convert_expr.Var";
+    Var v
+  | `Lit literal -> 
+    print_endline "IR.convert_expr.Lit";
+    Lit (convert_literal literal)
   | `App (f, x) ->
+    print_endline "IR.convert_expr.App";
     let rec go acc = function
       | `App (f', x') -> go (convert_expr x' :: acc) f'
       | `Var ident -> App (ident, acc)
@@ -134,6 +139,7 @@ let rec convert_expr : Term.ast -> t = function
     in
     go [ convert_expr x ] f
   | `Infix Term.{ left; op; right } ->
+    print_endline "IR.convert_expr.Infix";
     (match convert_expr op with
      | Var op -> Infix (convert_expr left, op, convert_expr right)
      | other ->
@@ -141,8 +147,11 @@ let rec convert_expr : Term.ast -> t = function
        @@ Printf.sprintf
             "Illegal term in binary operator position '%s'"
             (PrettyIR.ir other))
-  | `Proj (tm, field) -> Proj (convert_expr tm, field)
+  | `Proj (tm, field) -> 
+    print_endline "IR.convert_expr.Proj";
+    Proj (convert_expr tm, field)
   | `Match (scrut, arms) ->
+    print_endline "IR.convert_expr.Match";
     let open Util in
     let arms' =
       Tuple.into
@@ -152,14 +161,26 @@ let rec convert_expr : Term.ast -> t = function
     (match arms' with
      | Some (then_, else_) -> If (convert_expr scrut, convert_expr then_, convert_expr else_)
      | None -> failwith "Arbitrary pattern matching not implemented yet")
+  | `Pos (_, tm) -> 
+    print_endline "IR.convert_expr.Pos";
+    convert_expr tm
+  | `Ann (`Lam (x, body), pi_type) ->
+    print_endline "IR.convert_expr.Ann(Lam, _)";
+    print_endline "Trigger lambda lift";
+    convert_lambda_to_function pi_type x body
+  | `Ann (x, _type) -> 
+    print_endline "IR.convert_expr.Ann";
+    convert_expr x
+  | `Lam (x, body) -> 
+    print_endline "Illegal lone lambda!";
+    Printf.printf "Lam (%s, %s)" x (Pretty.ast body);
+    failwith "Fatal!"
+  | `Let (ident, Some ty, value, body) -> 
+      print_endline "IR.convert_expr.Ann";
+      Let (ident, convert_type ty, (convert_expr (`Ann (value, ty))), (convert_expr body))
   | `Err e ->
     failwith
     @@ Printf.sprintf "Error '%s' should not make it into codegen" (Pretty.error e)
-  | `Pos (_, tm) -> convert_expr tm
-  | `Ann (`Lam (x, body), pi_type) ->
-    print_endline "Trigger lambda lift";
-    convert_lambda_to_function pi_type x body
-  | `Ann (x, _type) -> convert_expr x
   | other -> failwith @@ Printf.sprintf "Illegal term in IR.convert: '%s'" (Pretty.ast other)
 
 and convert_literal : Term.ast Term.literal -> literal = function
@@ -254,5 +275,8 @@ let convert : Term.ast Term.declaration list -> declaration list = fun decls ->
         value = converted_body;
       }
   in 
-  Fresh.handle @@ fun () ->
-    List.map go decls
+  let x, xs = Context.handle @@ fun () ->
+    Fresh.handle @@ fun () ->
+      List.map go decls
+  in 
+  List.append x xs

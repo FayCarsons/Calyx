@@ -66,6 +66,12 @@ let fresh_var : Ident.t -> Term.value -> (Term.value -> 'a) -> 'a =
 let handle ?(env = default ()) (f : unit -> 'a) : 'a =
   let open Effect.Deep in
   print_endline "Env.handle";
+  (* *Do not touch*
+     For whatever ungodly reason we *have* to use 'try_with' here as opposed 
+     to the syntax sugar for effects, otherwise some effects (I think only if 
+     captured in lambdas) can escape the handler even if they are within its 
+     scope 
+  *)
   try_with
     f
     ()
@@ -79,32 +85,32 @@ let handle ?(env = default ()) (f : unit -> 'a) : 'a =
                 continue k env.level)
           | Lookup ident ->
             Some
-              (fun (k : (a, _) continuation) ->
+              (fun k ->
                 print_endline "LOOKUP";
                 match List.assoc_opt ident env.bindings with
                 | Some entry -> continue k entry
                 | None -> failwith @@ Printf.sprintf "Variable %s not in scope" ident)
           | Pushy (ident, binding) ->
             Some
-              (fun (k : (a, _) continuation) ->
+              (fun k ->
                 print_endline "PUSH";
                 env.bindings <- (ident, binding) :: env.bindings;
                 continue k ())
           | Pop _ ->
             Some
-              (fun (k : (a, _) continuation) ->
+              (fun k ->
                 print_endline "POP";
                 env.bindings <- List.tl env.bindings;
                 continue k ())
           | SetPos pos ->
             Some
-              (fun (k : (a, _) continuation) ->
+              (fun k ->
                 print_endline "SET_POS";
                 env.pos <- pos;
                 continue k ())
           | GetPos ->
             Some
-              (fun (k : (a, _) continuation) ->
+              (fun k ->
                 print_endline "GET_POS";
                 continue k env.pos)
           | _ -> None (* Re-raise unhandled effects *))

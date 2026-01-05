@@ -58,7 +58,11 @@ module WGSL : S = struct
   let float = string_of_float
   let bool = string_of_bool
   let app f x = Printf.sprintf "%s(%s)" f x
-  let let_ ident ty value body = Printf.sprintf "let %s%s = %s;\n%s" ident ty value body
+
+  let let_ ident ty value body =
+    Printf.sprintf "let %s : %s = %s;\n%s" ident ty value body
+  ;;
+
   let if_ cond t f = Printf.sprintf "select(%s, %s, %s)" f t cond
 
   let record type_name fields =
@@ -111,10 +115,32 @@ module WGSL : S = struct
       let right_expr = compile_expr right in
       Printf.sprintf "(%s %s %s)" left_expr op right_expr
     | Let (ident, ty_opt, value, body) ->
-      let wgsl_ty = compile_type ty_opt in
-      let compiled_value = compile_expr value in
-      let compiled_body = compile_expr body in
-      let_ ident wgsl_ty compiled_value compiled_body
+      (match ty_opt with
+       | TFunction _ ->
+         (* WGSL doesn't support first-class functions, so we inline function bindings *)
+         (* Replace all occurrences of `ident` in `body` with direct calls to `value` *)
+         let inline_function_calls expr =
+           let rec subst : Ir.t -> Ir.t = function
+             | Var name when name = ident -> value
+             | App (name, args) when name = ident ->
+               (match value with
+                | Var fn_name -> App (fn_name, List.map subst args)
+                | _ -> failwith "Expected function name for inlining")
+             | App (fn_name, args) -> App (fn_name, List.map subst args)
+             | Let (id, ty, v, b) -> Let (id, ty, subst v, subst b)
+             | If (c, t, f) -> If (subst c, subst t, subst f)
+             | Proj (e, field) -> Proj (subst e, field)
+             | Infix (l, op, r) -> Infix (subst l, op, subst r)
+             | other -> other
+           in
+           subst expr
+         in
+         compile_expr (inline_function_calls body)
+       | _ ->
+         let wgsl_ty = compile_type ty_opt in
+         let compiled_value = compile_expr value in
+         let compiled_body = compile_expr body in
+         let_ ident wgsl_ty compiled_value compiled_body)
     | If (scrut, t, f) ->
       Printf.sprintf
         "select(%s, %s, %s)"

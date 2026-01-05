@@ -72,17 +72,8 @@ let is_ident_char c =
 ;;
 
 let is_ident_legal c = is_upper c || is_lower c || is_digit c || List.mem c [ '_'; '-' ]
-let lexeme p = ws *> p <* ws
-let symbol s = string s <* ws *> pure ()
-
-let keyword s =
-  string s
-  <* (peek_char
-      >>= function
-      | Some c when is_ident_legal c -> fail "keyword"
-      | _ -> pure ())
-  <* ws
-;;
+let lexeme p = option () ws *> p <* option () ws
+let symbol s = string s <* option () ws
 
 let keywords =
   [ "def"
@@ -115,8 +106,7 @@ let div = symbol "/"
 
 (* Operator character classification *)
 let is_op_char = function
-  | '+' | '-' | '*' | '/' | '=' | '<' | '>' | '!' | '&' | '|' | '^' | '%' | '~' | '?' ->
-    true
+  | '+' | '-' | '*' | '/' | '<' | '>' | '!' | '&' | '|' | '^' | '%' | '~' | '?' -> true
   | _ -> false
 ;;
 
@@ -125,37 +115,6 @@ let infix_op = lexeme $ choice [ add; sub; mul; div; take_while1 is_op_char ]
 
 (* Check if string starts with an operator character *)
 let looks_like_operator s = (not (Int.equal (String.length s) 0)) && is_op_char s.[0]
-
-(* Precedence climbing parser for infix expressions *)
-let mk_parse_infix m =
-  let rec go min_prec atom_parser =
-    let* left = atom_parser in
-    let rec loop left =
-      peek_string 3
-      >>= fun lookahead ->
-      if looks_like_operator lookahead
-      then
-        let* op = option None (infix_op >>| Option.some) in
-        match op with
-        | None -> pure left
-        | Some op ->
-          let prec = Prec.lookup m op in
-          if prec < min_prec
-          then pure left
-          else (
-            (* TODO: Defaulting to assuming ops are left-associative 
-               but in the future we should track this as well in `Prec.t` 
-             *)
-            let next_min_prec = succ prec in
-            let* right = go next_min_prec atom_parser in
-            let combined = `Infix { left; op = mkvar op; right } in
-            loop combined)
-      else return left
-    in
-    loop left
-  in
-  go
-;;
 
 let var_ident =
   lexeme
@@ -171,7 +130,8 @@ let ctor_ident =
   $
   let* first = satisfy is_upper in
   let* rest = take_while is_ident_char in
-  pure $ String.make 1 first ^ rest
+  let name = String.make 1 first ^ rest in
+  if List.mem name keywords then fail ("reserved keyword: " ^ name) else pure name
 ;;
 
 let any_ident = var_ident <|> ctor_ident
@@ -218,7 +178,7 @@ let int_lit : Term.cst t =
 ;;
 
 let bool_lit : Term.cst t =
-  let* b = keyword "True" *> pure true <|> keyword "False" *> pure false in
+  let* b = symbol "True" *> pure true <|> symbol "False" *> pure false in
   pure $ `Lit (Bool b)
 ;;
 
@@ -272,115 +232,123 @@ end
 
 let expr : Term.cst t =
   let prec_map = Prec.from_list [] in
-  let parse_infix = mk_parse_infix prec_map in
   fix (fun expr ->
+    (* === ATOMS: Only recurse through parens === *)
     let atom =
       lexeme
-      $ choice
-          [ parens expr
-          ; mkvar <$> var_ident
-          ; mkvar <$> ctor_ident
-          ; bool_lit
-          ; float_lit
-          ; int_lit
-          ; record_lit expr
-          ]
+      @@ choice
+           [ (* Parenthesized expression - this is where expr recurses safely *)
+             char '(' *> ws *> expr <* ws <* char ')'
+           ; mkvar <$> var_ident
+           ; mkvar <$> ctor_ident
+           ; bool_lit
+           ; float_lit (* must come before int_lit *)
+           ; int_lit
+           ; record_lit expr
+           ]
     in
-    (* Field projection like 'foo.bar' or '{ foo = 4 }.foo' *)
-    let proj =
-      let* base = atom in
-      let* fields = many (symbol "." *> any_ident) in
-      pure $ List.fold_left (fun e f -> `Proj (e, f)) base fields
-    in
-    (* Application like 'succ 0' *)
+    (* === APPLICATION: One or more atoms, left-associative === *)
     let app =
-      let* f = proj in
-      let* args = many proj in
-      pure $ List.fold_left (fun f x -> `App (f, x)) f args
+      let* head = atom in
+      let* tail = many atom in
+      pure @@ List.fold_left (fun f x -> `App (f, x)) head tail
     in
-    (* Infix operators with precedence *)
-    let infix_expr = parse_infix 0 app in
-    let arrow_or_pi =
-      fix (fun arrow_or_pi ->
-        (* Try to parse dependent pi '(x : A) -> B' *)
-        let maybe_pi =
-          let* _ = symbol "(" in
-          let* inner = expr in
-          let* _ = symbol ")" in
-          let* rest = option None (symbol "->" *> arrow_or_pi >>| Option.some) in
-          match rest, inner with
-          | Some cod, `Ann (`Var x, a) -> pure @@ `Pi (x, a, cod)
-          | Some cod, dom -> pure @@ `Pi ("_", dom, cod)
-          | None, _ -> pure inner
-        in
-        (* If that fails, try a simple arrow 'A -> B' *)
-        let simple_arrow =
-          let* dom = infix_expr in
-          let* rest = option None (symbol "->" *> arrow_or_pi >>| Option.some) in
-          match rest with
-          | None -> pure dom
-          | Some cod -> pure @@ `Pi ("_", dom, cod)
-        in
-        maybe_pi <|> simple_arrow)
+    (* === INFIX: Pratt-style precedence climbing over applications === *)
+    let infix_expr =
+      let rec go min_prec left =
+        let* c = peek_char in
+        match c with
+        | Some c when is_op_char c ->
+          (* Wrap in a fallible parser so we backtrack if op is reserved or wrong precedence *)
+          let try_op =
+            let* op = infix_op in
+            let prec = Prec.lookup prec_map (Ident.mk op) in
+            if prec < min_prec
+            then fail "precedence too low"
+            else
+              let* right = app >>= go (prec + 1) in
+              go min_prec (`Infix { left; op = mkvar op; right })
+          in
+          try_op <|> pure left
+        | _ -> pure left
+      in
+      app >>= go 0
     in
-    (* Annotation like (0 :: UInt) *)
-    let ann base : Term.cst t =
-      let* _ = symbol ":" in
-      let* ty = expr in
-      pure $ `Ann (base, ty)
-    in
-    (* Lambda like '\x -> x + 42' *)
-    let lam =
-      let* _ = symbol "\\" in
-      let* x = var_ident in
+    (* Pi: (x : A) -> B *)
+    let pi =
+      let* ident, dom =
+        (char '('
+         *> ws
+         *>
+         let* id = var_ident in
+         let* _ = ws *> char ':' *> ws in
+         let* ty = expr in
+         pure (id, ty))
+        <* ws
+        <* char ')'
+        <* ws
+      in
       let* _ = symbol "->" in
-      let* body = expr in
-      pure $ `Lam (x, body)
+      let* cod = expr in
+      pure @@ `Pi (ident, dom, cod)
     in
-    (* Let expression like 'let x : Nat = Zero in x' *)
+    (* Arrow: A -> B *)
+    let arrow_or_operand =
+      let* left = infix_expr in
+      let* arrow_opt = option None (symbol "->" *> expr >>| Option.some) in
+      match arrow_opt with
+      | Some right -> pure @@ `Pi ("_", left, right)
+      | None -> pure left
+    in
+    (* Lam: \x -> x *)
+    let lam =
+      let* _ = char '\\' in
+      let* x = ws *> var_ident in
+      let* _ = ws *> string "->" *> ws in
+      let* body = expr in
+      pure @@ `Lam (x, body)
+    in
+    (* Let: let x : t = v in b *)
     let let_expr =
       let* _ = symbol "let" in
       let* x = var_ident in
-      let* ty = Option.some <$> char ':' *> expr <|> pure None in
+      let* ty = option None (symbol ":" *> expr >>| Option.some) in
       let* _ = symbol "=" in
       let* bound = expr in
       let* _ = symbol "in" in
       let* body = expr in
-      pure $ `Let (x, ty, bound, body)
+      pure @@ `Let (x, ty, bound, body)
     in
-    (* If expression like `if True then Succ Zero else Zero` *)
+    (* If: if x then t else f *)
     let if_ =
-      let* _ = keyword "if" in
+      let* _ = symbol "if" in
       let* cond = expr in
-      let* _ = keyword "then" in
+      let* _ = symbol "then" in
       let* then_ = expr in
-      let* _ = keyword "else" in
+      let* _ = symbol "else" in
       let* else_ = expr in
-      pure $ `If (cond, then_, else_)
+      pure @@ `If (cond, then_, else_)
     in
-    let base = choice [ lam; let_expr; if_; arrow_or_pi ] in
-    let* e = base in
-    option e (ann e))
+    choice [ lam; let_expr; if_; pi; arrow_or_operand ])
 ;;
 
 let toplevel =
   let arg =
     parens
-    $
-    let* idents = many1 any_ident in
-    let* _ = symbol ":" in
-    let* ty = expr in
-    pure $ List.map (fun i -> i, ty) idents
+      (let* idents = many1 any_ident in
+       let* _ = symbol ":" in
+       let* ty = expr in
+       pure $ List.map (fun i -> i, ty) idents)
   in
   let fn_decl =
-    let* _ = keyword "def" in
+    let* _ = symbol "def" in
     let* ident = any_ident in
     let* args = many arg in
     let* _ = symbol "->" in
     let* return_type = expr in
-    let* _ = keyword "do" in
+    let* _ = symbol "do" in
     let* body = expr in
-    let* _ = keyword "end" in
+    let* _ = symbol "end" in
     let typ =
       List.fold_right
         (fun (ident, ty) acc -> `Pi (ident, ty, acc))
@@ -393,8 +361,9 @@ let toplevel =
     pure $ Term.Function { ident; typ; body }
   in
   let constant_decl =
-    let* _ = keyword "const" in
+    let* _ = symbol "const" in
     let* ident = any_ident in
+    let* _ = symbol ":" in
     let* typ = expr in
     let* _ = symbol "=" in
     let* body = expr in

@@ -205,31 +205,6 @@ let record_lit (expr : Term.cst t) : Term.cst t =
   mk <$> braces (sep_by1 (char ',') entry)
 ;;
 
-(** JSON-like primitive parsing for attributes 
-    So a declaration can have an annotation like: 
-    ```haskell 
-    @infix{prec = 4; assoc = "left"}
-    def (<$>) (f : A -> B) [Functor T] (x : T A) -> T B do
-      Functor.map f x
-    ```
-
-    Alternatively global settings or special declarations can be done like: 
-    ```
-    @extern putc : Char -> IO unit = <clayx_putc>
-    @module{mustEraseViaPartialEvaluation = True}
-    ```
- *)
-
-module Value = struct
-  type t =
-    | Int of int
-    | Float of float
-    | Bool of bool
-    | String of string
-    | Array of t list
-    | Object of (Ident.t * t) list
-end
-
 let expr : Term.cst t =
   let prec_map = Prec.from_list [] in
   fix (fun expr ->

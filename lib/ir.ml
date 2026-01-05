@@ -1,3 +1,6 @@
+(* TODO: Currently IR primarily serves to flatten function declarations and applications, as well as do lambda lifting. 
+  But eventually we want to a CPS -> ANF transform
+*)
 module Fresh = struct
   type _ Effect.t += Get : string -> string Effect.t 
 
@@ -13,7 +16,6 @@ module Fresh = struct
       | effect e, k -> 
         continue k (Effect.perform e)
 end
-
 
 type ty =
   | TVar of Ident.t

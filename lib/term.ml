@@ -172,7 +172,39 @@ let desugar_toplevel = function
     RecordDecl { ident; params; fields }
 ;;
 
-type 'a program =
-  { body : 'a declaration list
-  ; meta : (string * string) list
+module Object = struct
+  (** JSON-like primitive for attributes 
+    So a declaration can have an annotation like: 
+    ```haskell 
+    @infix{prec = 4; assoc = "left"}
+    def (<$>) (f : A -> B) [Functor T] (x : T A) -> T B do
+      Functor.map f x
+    ```
+
+    Alternatively global settings or special declarations can be done like: 
+    ```
+    module MyShader (
+      @target = WGSL
+    , @stage = Fragment
+    , myFunction
+    , MyType(..)
+    ) where
+
+    NOTE: This syntax isn't great - let's re-evaluate soon
+    ```
+ *)
+  type t =
+    | Int of int
+    | Float of float
+    | Bool of bool
+    | String of string
+    | Identifier of Ident.t
+    | Array of t list
+    | Object of (Ident.t * t) list
+end
+
+type calyx_module =
+  { ident : Ident.t
+  ; metadata : Object.t list
+  ; declarations : ast declaration list
   }

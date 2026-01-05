@@ -109,10 +109,33 @@ module WGSL : S = struct
   (* Add return to the innermost expression in a function body *)
   let rec add_return_to_final_expr : Ir.t -> string = function
     | Let (ident, ty, value, body) ->
-      let wgsl_ty = compile_type ty in
-      let compiled_value = compile_expr value in
-      let compiled_body = add_return_to_final_expr body in
-      Printf.sprintf "let %s : %s = %s;\n%s" ident wgsl_ty compiled_value compiled_body
+      Printf.printf "DEBUG: add_return_to_final_expr Let binding '%s' has type: %s\n" ident (Ir.PrettyIR.ir_ty ty);
+      (match ty with
+       | TFunction _ ->
+         Printf.printf "DEBUG: Inlining function binding '%s' in function body\n" ident;
+         (* WGSL doesn't support first-class functions, so we inline function bindings *)
+         let inline_function_calls expr =
+           let rec subst : Ir.t -> Ir.t = function
+             | Var name when name = ident -> value
+             | App (name, args) when name = ident ->
+               (match value with
+                | Var fn_name -> App (fn_name, List.map subst args)
+                | _ -> failwith "Expected function name for inlining")
+             | App (fn_name, args) -> App (fn_name, List.map subst args)
+             | Let (id, ty, v, b) -> Let (id, ty, subst v, subst b)
+             | If (c, t, f) -> If (subst c, subst t, subst f)
+             | Proj (e, field) -> Proj (subst e, field)
+             | Infix (l, op, r) -> Infix (subst l, op, subst r)
+             | other -> other
+           in
+           subst expr
+         in
+         add_return_to_final_expr (inline_function_calls body)
+       | _ ->
+         let wgsl_ty = compile_type ty in
+         let compiled_value = compile_expr value in
+         let compiled_body = add_return_to_final_expr body in
+         Printf.sprintf "let %s : %s = %s;\n%s" ident wgsl_ty compiled_value compiled_body)
     | other -> Printf.sprintf "return %s;" (compile_expr other)
 
   (* Compile an expression to WGSL *)
@@ -124,8 +147,13 @@ module WGSL : S = struct
       let right_expr = compile_expr right in
       Printf.sprintf "(%s %s %s)" left_expr op right_expr
     | Let (ident, ty_opt, value, body) ->
+      Printf.printf
+        "DEBUG: Let binding '%s' has type: %s\n"
+        ident
+        (Ir.PrettyIR.ir_ty ty_opt);
       (match ty_opt with
        | TFunction _ ->
+         Printf.printf "DEBUG: Inlining function binding '%s'\n" ident;
          (* WGSL doesn't support first-class functions, so we inline function bindings *)
          (* Replace all occurrences of `ident` in `body` with direct calls to `value` *)
          let inline_function_calls expr =

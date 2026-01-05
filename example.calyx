@@ -1,4 +1,9 @@
+data Uniforms where 
+  size : Vec2 Float,
+  time : Float
+
+const Nat : Int = 0
+
 def main (x : Int) -> Int do 
   let inc : Int -> Int = \x -> x + 1 in
   inc x
-end

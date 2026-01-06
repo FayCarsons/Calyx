@@ -302,6 +302,7 @@ let expr : Term.cst t =
       let* then_ = expr in
       let* _ = symbol "else" in
       let* else_ = expr in
+      let* _ = symbol "end" in
       pure @@ `If (cond, then_, else_)
     in
     choice [ lam; let_expr; if_; pi; arrow_or_operand ])

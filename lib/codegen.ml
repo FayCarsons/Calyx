@@ -189,6 +189,8 @@ end
 module Javascript : S = struct
   let standard_library =
     [ "Int", Env.Typed (`Var "Int", `Type)
+    ; "Bool", Env.Typed (`Var "Bool", `Type)
+    ; "Unit", Env.Typed (`Var "Unit", `Type)
     ; ( "+"
       , Env.Typed
           ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "+", x), y)))
@@ -201,6 +203,24 @@ module Javascript : S = struct
           , `Pi
               ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Int"))))
           ) )
+    ; ( "*"
+      , Env.Typed
+          ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "*", x), y)))
+          , `Pi
+              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Int"))))
+          ) )
+    ; ( "/"
+      , Env.Typed
+          ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "/", x), y)))
+          , `Pi
+              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Int"))))
+          ) )
+    ; ( "=="
+      , Env.Typed
+          ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "==", x), y)))
+          , `Pi
+              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Bool"))))
+          ) )
     ; ( "succ"
       , Env.Typed
           ( `Lam ("x", fun x -> `App (`App (`Var "+", x), `Lit (Int 1)))
@@ -211,6 +231,10 @@ module Javascript : S = struct
           , `Pi
               ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Bool"))))
           ) )
+    ; ( "print"
+      , Env.Typed
+          ( `Lam ("a", fun a -> `App (`Var "print", a))
+          , `Pi ("_", `Var "Int", Fun.const (`Var "Unit")) ) )
     ]
   ;;
 
@@ -223,6 +247,15 @@ module Javascript : S = struct
   let bool = string_of_bool
   let app f x = Printf.sprintf "%s(%s)" f x
   let let_ ident value body = Printf.sprintf "const %s = %s;\n%s" ident value body
+  let ternary scrut t f = Printf.sprintf "%s ? %s : %s" scrut t f
+  let if_ scrut t f = Printf.sprintf "if (%s) {\n  %s\n} else {\n  %s\n}\n" scrut t f
+
+  (* Essentially, 'can this be one arm of a JS ternary' *)
+  let rec is_expression : Ir.t -> bool = function
+    | Var _ | Proj _ | Lit _ | Infix _ -> true
+    | App (_, x) -> List.for_all is_expression x
+    | Let _ | If _ | Match _ -> false
+  ;;
 
   let record_literal fields =
     Printf.sprintf
@@ -238,7 +271,8 @@ module Javascript : S = struct
   let rec add_return_to_final_expr : Ir.t -> string = function
     | Let (ident, _, value, body) ->
       let_ ident (compile_expr value) (add_return_to_final_expr body)
-    | other -> Printf.sprintf "return %s;" (compile_expr other)
+    | other when is_expression other -> Printf.sprintf "return %s;" (compile_expr other)
+    | other -> compile_expr other
 
   and compile_expr : Ir.t -> string = function
     | Var name -> var name
@@ -249,7 +283,13 @@ module Javascript : S = struct
       Printf.sprintf "%s %s %s" left_expr op right_expr
     | Let (ident, _, value, body) -> let_ ident (compile_expr value) (compile_expr body)
     | If (scrut, t, f) ->
-      Printf.sprintf "%s ? %s : %s" (compile_expr scrut) (compile_expr t) (compile_expr f)
+      if is_expression scrut && is_expression t && is_expression f
+      then (
+        let scrut, t, f = compile_expr scrut, compile_expr t, compile_expr f in
+        ternary scrut t f)
+      else (
+        let scrut, t, f = compile_expr scrut, compile_expr t, compile_expr f in
+        if_ scrut t f)
     | Match _ -> failwith "TODO"
     | Proj (term, field) -> proj (compile_expr term) field
     | Lit (Int n) -> int n

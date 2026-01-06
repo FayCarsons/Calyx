@@ -1,3 +1,5 @@
+open Util
+
 type entry =
   | Untyped of Term.value
   | Typed of Term.value * Term.value
@@ -28,7 +30,7 @@ let default () =
 ;;
 
 type _ Effect.t +=
-  | Lookup : Ident.t -> entry Effect.t
+  | Lookup : Ident.t -> entry option Effect.t
   | Push : (Ident.t * entry) -> unit Effect.t
   | Pop : unit -> unit Effect.t
   | (* Try to find a type with the same structure *)
@@ -40,9 +42,13 @@ type _ Effect.t +=
   | Level : int Effect.t
 
 let ( >> ) f g = Fun.compose g f
-let lookup : Ident.t -> entry = fun ident -> Effect.perform (Lookup ident)
-let lookup_value : Ident.t -> Term.value = lookup >> value
-let lookup_type : Ident.t -> Term.value option = lookup >> typ
+let lookup : Ident.t -> entry option = fun ident -> Effect.perform (Lookup ident)
+let lookup_value : Ident.t -> Term.value option = fun ident -> value <$> lookup ident
+
+let lookup_type : Ident.t -> Term.value option =
+  fun ident -> Option.bind (lookup ident) typ
+;;
+
 let get_pos : unit -> Pos.t = fun () -> Effect.perform GetPos
 let set_pos pos = Effect.perform (SetPos pos)
 let level () = Effect.perform Level
@@ -96,9 +102,7 @@ let handle ?(env = default ()) (f : unit -> 'a) : 'a =
             Some
               (fun k ->
                 print_endline "LOOKUP";
-                match List.assoc_opt ident env.bindings with
-                | Some entry -> continue k entry
-                | None -> failwith @@ Printf.sprintf "Variable %s not in scope" ident)
+                continue k @@ List.assoc_opt ident env.bindings)
           | LookupTypeName fields ->
             Some
               (fun k ->

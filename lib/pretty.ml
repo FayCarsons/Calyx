@@ -2,6 +2,7 @@ open Term
 
 let error : Error.t -> string = function
   | `Expected (expected, got) -> Printf.sprintf "Expected %s, got %s" expected got
+  | `UnificationFailure (a, b) -> Printf.sprintf "Cannot unify '%s' with '%s'" a b
   | `InferLambda -> "Cannot infer lambda"
   | `NotFound n -> Printf.sprintf "No var '%s' in scope" n
   | `NoField (field, record) ->

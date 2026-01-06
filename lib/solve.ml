@@ -12,6 +12,16 @@ module Constraints = struct
       | Fragment
       | Vertex
       | Compute
+
+    let pretty = function 
+      | Unify (a, b) -> 
+          Printf.sprintf "Unify %s %s" (Pretty.value a) (Pretty.value b)
+      | HasField (ident, ty, tm) -> Printf.sprintf "HasField %s %s %s" ident (Pretty.value ty) (Pretty.value tm)
+      | HasStage (tm, stage) -> 
+          Printf.sprintf "HasStage %s %s" (Pretty.value tm) @@ match stage with 
+          | Fragment -> "Fragment"
+          | Vertex -> "Vertex"
+          | Compute -> "Compute"
   end
 
   include Writer.Make (M)
@@ -50,6 +60,15 @@ let rec force : value -> value = function
     (match Solution.solution m with
      | Some solution -> force solution
      | None -> v)
+  | `Neutral (NVar (_, ident)) as v ->
+    (* Try to look up the variable in the environment *)
+    (match Env.lookup_value ident with 
+    | Some (`Var ident' | `Neutral (NVar (_, ident')) as v') -> 
+      if Ident.equal ident ident' then 
+        v 
+      else 
+        force v'
+    | _ -> v)
   | v -> v
 ;;
 
@@ -99,11 +118,13 @@ let (let*) = Result.bind
 let rec unify  : value -> value -> (unit, Error.t) result = fun a b ->
   let a = force a and b = force b in 
   match a, b with 
+  | `Var l, `Var r -> 
+      if String.equal l r then Ok () 
+      else Error (`UnificationFailure (l, r))
   | `Neutral (NMeta m1), `Neutral (NMeta m2) when Meta.equal m1 m2 -> 
       Ok ()
   | `Neutral (NMeta m), v 
-  | v, `Neutral (NMeta m) -> 
-    let* _ = solve_meta m v in Ok ()
+  | v, `Neutral (NMeta m) -> solve_meta m v 
   | `Type, `Type -> Ok ()
   | `Lam (_, body1), `Lam (_, body2) -> 
       let var = `Neutral (NVar (0, "_")) in 
@@ -121,24 +142,20 @@ let rec unify  : value -> value -> (unit, Error.t) result = fun a b ->
       Ok ()
   | `Neutral l, `Neutral r -> unify_neutral l r 
   | `Lit l, `Lit r -> unify_lit l r 
-  | `Row l, `Row r -> unify_rows l r 
-  | `Rec l, `Rec r -> 
-      Constraints.(tell $ Unify (l, r)); 
-      Ok ()
   | `Err _, _ | _, `Err _ -> Ok ()
-  | _,_ -> Error `Todo
+  | a, b -> Error (`UnificationFailure (Pretty.value a, Pretty.value b))
 
 and unify_neutral : neutral -> neutral -> (unit, Error.t) result = fun l r -> 
   match l,r with 
-  | NVar (l, _) , NVar (r, _) when Int.equal l r -> Ok ()
+  | NVar (l_level, l_name), NVar (r_level, r_name) when Int.equal l_level r_level && String.equal l_name r_name -> Ok ()
   | NApp (f, x), NApp (f', x') -> 
       let* _ = unify_neutral f f' in 
-      Constraints.tell @@Unify (x, x');
+      Constraints.tell @@ Unify (x, x');
       Ok ()
   | NProj (tm, field), NProj (tm', field') when String.equal field field' -> 
       unify_neutral tm tm' 
   (* Neutrals mismatch*)
-  | _, _ -> Error `Todo
+  | l, r -> Error (`UnificationFailure (Pretty.neutral l, Pretty.neutral r))
 
 and unify_lit l r = 
   match l, r with 
@@ -157,7 +174,7 @@ and unify_lit l r =
         ) sorted_l sorted_r;
         Ok ()
       end else 
-        Error `Todo
+        Error (`UnificationFailure ("record fields mismatch", "record fields mismatch"))
     end
   | _, _ -> 
       Error `Todo
@@ -190,28 +207,46 @@ and vapp = fun f x ->
   | `Neutral n -> Result.ok @@ `Neutral (NApp (n , x))
   | otherwise -> Error (`Expected ("function", (Pretty.value otherwise)))
 
-type solver 
-  = Solved 
+type solver_error =
   | Stuck of { stuck : Constraints.t list; errors : Error.t list }
+  | Errors of Error.t list
 
-let rec solve (initial : Constraints.t list) : solver =
+let pretty_solver_error = function 
+  | Stuck { stuck; errors } -> 
+      Printf.sprintf "Stuck!\nCould not solve constraints:\n%s\nWith errors:\n%s\n" (String.concat ", " @@ List.map Constraints.pretty stuck) (String.concat ", " @@ List.map Pretty.error errors)
+  | Errors es -> Printf.sprintf "Failed to solve due to errors:\n%s\n" (String.concat ", " @@ List.map Pretty.error es)
+
+let rec solve (initial : Constraints.t list) : (unit, solver_error) result =
   let progressed = ref false in
   let ((_, next), errors) = 
     Error.handle @@ fun () -> 
       Constraints.handle @@ fun () -> 
-        List.iter (fun c -> progressed := solve_one c) initial
+        List.iter (fun c -> 
+          print_endline (Printf.sprintf "SOLVING CONSTRAINT: %s" (Constraints.pretty c));
+          progressed := solve_one c) initial
   in 
   match next, errors, !progressed with 
-  | [], [], _ -> Solved 
-  | _, _, true -> solve next
-  | stuck, errors, false -> Stuck { stuck; errors }
+  | [], [], _ -> 
+    Ok ()
+  | [], (_ :: _ as es), true -> 
+    Error (Errors es)
+  | _, _, true -> 
+    solve next
+  | stuck, errors, false -> 
+    Error (Stuck { stuck; errors })
+
 
 and solve_one = function 
   | Unify (a, b) -> 
     begin 
+      Printf.printf "SOLVING UNIFY '%s' '%s'\n" (Pretty.value a) (Pretty.value b);
       match unify a b with 
-      | Ok () -> true
-      | Error e -> Error.tell e; true
+      | Ok () -> 
+          print_endline "SUCCEEDED";
+          true
+      | Error e -> 
+          print_endline "FAILED";
+          Error.tell e; true
     end
   | HasField (label, record, field) -> solve_record label record field  
   | HasStage _ -> Error.tell `Todo; true

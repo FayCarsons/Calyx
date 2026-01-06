@@ -10,7 +10,7 @@ let over_literal (f : 'a -> 'b) : 'a Term.literal -> 'b Term.literal = function
 ;;
 
 let rec eval : Term.ast -> Term.value = function
-  | `Var name -> Env.lookup_value name
+  | `Var name -> Env.lookup_value name |> Option.get
   | `Ann (e, _) -> eval e
   | `Type -> `Type
   | `Pi (x, dom, cod) ->
@@ -313,7 +313,7 @@ let infer_toplevel
     | Function { ident; typ; body } :: rest ->
       let vty = eval typ in
       Printf.printf
-        "infer_toplevel.Function { ident = %s; typ = %s; body = %s }"
+        "infer_toplevel.Function { ident = %s; typ = %s; body = %s }\n"
         ident
         (Pretty.value vty)
         (Pretty.ast body);
@@ -347,8 +347,8 @@ let infer_toplevel
         match program with
         | Ok program ->
           (match Solve.solve constraints with
-           | Solve.Stuck { errors; _ } when errors <> [] -> Error errors
-           | _ -> Ok program)
+           | Ok () -> Ok program
+           | Error es -> failwith (Solve.pretty_solver_error es))
         | Error es -> Error es))
   in
   Result.map (Tuple.intoRev gen) result

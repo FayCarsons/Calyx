@@ -1,9 +1,5 @@
-data Uniforms where 
-  size : Vec2 Float,
-  time : Float
+def fib (n : Int) -> Int do 
+  if n < 2 then n else fib (n - 1) + fib (n - 2)
 
-const Nat : Int = 0
-
-def main (x : Int) -> Int do 
-  let inc : Int -> Int = \x -> x + 1 in
-  inc x
+def main -> Int do 
+  fib 4

@@ -15,7 +15,7 @@ let error : Error.t -> string = function
   | `Todo -> "TODO"
 ;;
 
-let record ?tail (prn : 'a -> string) (fields : (Ident.t * 'a) list) : string =
+let record ?(tail = None) (prn : 'a -> string) (fields : (Ident.t * 'a) list) : string =
   let fields =
     List.map (fun (ident, v) -> Printf.sprintf "%s = %s" ident (prn v)) fields
     |> String.concat ","
@@ -70,8 +70,7 @@ let rec value : value -> string = function
   | `Neutral n ->
     print_endline "Pretty.value.Neutral";
     neutral n
-  | `Row record' -> record value record'.fields ~tail:record'.tail
-  | `RowNil -> "{}"
+  | `Row { fields; tail } -> record value fields ~tail
   | `Rec row -> value row
   | `Ann (`Ann (x, t), _) -> base value (`Ann (x, t))
   | #base as other -> base value (other :> value base)

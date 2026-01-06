@@ -20,7 +20,7 @@ let rec eval : Term.ast -> Term.value = function
     let body = fun v -> Env.local_untyped x ~value:v @@ fun () -> eval body in
     `Lam (x, body)
   | `App (f, x) -> app (eval f) (eval x)
-  | `Proj (term, field) -> proj (eval term) field
+  | `Proj (term, field) -> proj field (eval term)
   | `Let (ident, Some ty, value, body) ->
     let ty = eval ty
     and value = eval value in
@@ -28,7 +28,7 @@ let rec eval : Term.ast -> Term.value = function
   | `Let (ident, None, value, body) ->
     let value = eval value in
     Env.local_untyped ident ~value @@ fun () -> eval body
-  | `Match (_scrut, _arms) -> failwith "TODO"
+  | `Match (scrut, arms) -> `Match (eval scrut, List.map (Tuple.bimap pattern eval) arms)
   | `Pos (pos, exp) ->
     Env.set_pos pos;
     eval exp
@@ -47,11 +47,17 @@ and app f x =
   | `Neutral n -> `Neutral (NApp (n, x))
   | _ -> failwith "Apply non-function"
 
-and proj (term : Term.value) (field : Ident.t) : Term.value =
-  match term with
+and proj (field : Ident.t) : Term.value -> Term.value = function
   | `Lit (Record fields) -> List.assoc field fields
   | `Neutral n -> `Neutral (NProj (n, field))
   | _ -> failwith "Projection from non-record"
+
+and pattern : Term.ast Term.pattern -> Term.value Term.pattern = function
+  | PVar x -> PVar x
+  | PWild -> PWild
+  | PCtor (ctor, args) -> PCtor (ctor, List.map pattern args)
+  | PLit lit -> PLit (over_literal eval lit)
+  | PRec fields -> PRec (List.map (Tuple.second pattern) fields)
 ;;
 
 let rec quote (lvl : int) : Term.value -> Term.ast = function
@@ -66,6 +72,13 @@ let rec quote (lvl : int) : Term.value -> Term.ast = function
     `Lam (x, quote (succ lvl) (b var))
   | `Lit lit -> `Lit (Term.over_literal (quote lvl) lit)
   | `Err e -> `Err e
+  | `Rec r -> quote lvl r
+  | `Row { fields; tail = None } ->
+    let fields = List.map (Tuple.second (quote lvl)) fields in
+    `Lit (Record fields)
+  | `Row { fields; tail = Some (`Neutral (NMeta _)) } ->
+    let fields = List.map (Tuple.second (quote lvl)) fields in
+    `Lit (Record fields)
   | #base as b -> (Term.over_base (quote lvl) b :> Term.ast)
   | otherwise -> failwith (Printf.sprintf "Cannot handle '%s'" $ Pretty.value otherwise)
 
@@ -133,6 +146,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
     let vt = eval a in
     let* e = check e vt in
     Ok (vt, `Ann (e, a))
+  (* TYPE : Type *)
   | `Type ->
     print_endline "infer.Type";
     Ok (`Type, `Type)
@@ -146,9 +160,26 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
     print_endline "infer.Pos";
     Env.set_pos p;
     infer term
-  | `Match (_x, _arms) ->
+  | `Match (scrut, arms) ->
     print_endline "infer.Match";
-    failwith "TODO"
+    let* scrut_ty, scrut' = infer scrut in
+    let infer_arm (pattern, body) =
+      let* body_ty, body' = infer body in
+      Ok ((pattern, `Ann (body', quote 0 body_ty)), body_ty)
+    in
+    let* arms_and_types = sequence @@ List.map infer_arm arms in
+    let annotated_arms = List.map fst arms_and_types in
+    let arm_types = List.map snd arms_and_types in
+    (match arm_types with
+     | [] -> Error (`Expected ("non-empty match", "empty match"))
+     | first_ty :: rest_types ->
+       let unify_first ty = Solve.Constraints.(tell $ Unify (first_ty, ty)) in
+       List.iter unify_first rest_types;
+       Ok
+         ( first_ty
+         , `Ann
+             (`Match (`Ann (scrut', quote 0 scrut_ty), annotated_arms), quote 0 first_ty)
+         ))
   | `Lit lit ->
     print_endline "infer.Lit";
     let* ty, lit' = infer_lit lit in
@@ -161,7 +192,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
     Ok (`Err e, `Err e)
   | `Infix { left; op; right } ->
     print_endline "infer.Infix";
-    (* Type check as function application but preserve infix structure *)
+    (* Type check as regular application but preserve infix structure *)
     let* left_type, left = infer left in
     let* op_type, op = infer op in
     let* right_type, right = infer right in
@@ -195,11 +226,13 @@ and infer_lit
   | Float x -> Ok (`Var "Float", Float x)
   | Bool b -> Ok (`Var "Bool", Bool b)
   | Record structure ->
-    let rec sequence = function
-      | Ok x :: xs -> Result.map (List.cons x) $ sequence xs
-      | [] -> Ok []
-      | Error e :: _ -> Error e
-    in
+    (* TODO: We should attempt to find the type name here and return an 
+      `Ann (record, type_name). We cannot do this without refactoring the 
+      record system in general. Term.value's `Rec and `Row shouldn't exist,
+      we should just have one Record literal and if it's at the type level
+      then that's a row type 100% of the time. If a record is referred to by 
+      name, that's nominal. EzPz
+    *)
     let* fields =
       sequence
       $ List.map
@@ -210,7 +243,7 @@ and infer_lit
     in
     let row_fields = List.map fst fields in
     let ast_fields = List.map snd fields in
-    let tail = `Neutral (NMeta (Meta.fresh ())) in
+    let tail = Option.some @@ `Neutral (NMeta (Meta.fresh ())) in
     Ok (`Rec (`Row { fields = row_fields; tail }), Record ast_fields)
 
 and check : Term.ast -> Term.value -> (Term.ast, Error.t) result =
@@ -278,17 +311,17 @@ let infer_toplevel
     -> (Term.ast Term.declaration list, Error.t list) result
     = function
     | Function { ident; typ; body } :: rest ->
-      let* typ_value, body_ast =
-        Result.map_error singleton
-        $
-        let vty = eval typ in
-        let* body_ast = check body vty in
-        Ok (vty, body_ast)
-      in
-      Env.local_typed ident ~ty:typ_value ~value:(eval body_ast) (fun () ->
-        let typ_ast = quote 0 typ_value in
-        Result.map (List.cons (Function { ident; typ = typ_ast; body = body_ast }))
-        $ go rest)
+      let vty = eval typ in
+      Printf.printf
+        "infer_toplevel.Function { ident = %s; typ = %s; body = %s }"
+        ident
+        (Pretty.value vty)
+        (Pretty.ast body);
+      let placeholder = `Neutral (NVar (Env.level (), ident)) in
+      Env.local_typed ident ~value:placeholder ~ty:vty (fun () ->
+        let* body = Result.map_error singleton @@ check body vty in
+        let typ = quote 0 vty in
+        Result.map (List.cons (Function { ident; typ; body })) $ go rest)
     | Constant { ident; typ; body } :: rest ->
       let* ty, value =
         Result.map_error singleton
@@ -301,7 +334,10 @@ let infer_toplevel
       Env.local_typed ident ~ty ~value (fun () ->
         let typ = quote 0 ty in
         Result.map (List.cons (Constant { ident; typ; body })) $ go rest)
-    | record :: rest -> Result.map (List.cons record) (go rest)
+    | RecordDecl { ident; fields; _ } :: rest ->
+      let fields = List.map (Tuple.second eval) fields in
+      Env.local_typed ident ~value:(`Row { fields; tail = None }) ~ty:`Type
+      @@ fun () -> go rest
     | [] -> Ok []
   in
   let result, gen =

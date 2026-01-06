@@ -7,10 +7,6 @@ module type StandardLibrary = sig
 end
 
 module type S = sig
-  type expr
-  type ty
-  type declaration
-
   val standard_library : (Ident.t * Env.entry) list
   val map_types : (Ident.t * Ident.t) list
   val native_infix : Ident.t list
@@ -18,10 +14,6 @@ module type S = sig
 end
 
 module WGSL : S = struct
-  type expr = string
-  type ty = string
-  type declaration = string
-
   let standard_library =
     [ "Int", Env.Typed (`Var "Int", `Type)
     ; ( "+"
@@ -50,7 +42,7 @@ module WGSL : S = struct
     Printf.sprintf "let %s : %s = %s;\n%s" ident ty value body
   ;;
 
-  let record type_name fields =
+  let record_literal type_name fields =
     Printf.sprintf "%s(%s)" type_name (String.concat "," $ List.map snd fields)
   ;;
 
@@ -67,7 +59,7 @@ module WGSL : S = struct
   ;;
 
   (* Compile a type to WGSL type syntax *)
-  let rec compile_type : Ir.ty -> ty = function
+  let rec compile_type : Ir.ty -> string = function
     | TVar "Int" -> "i32"
     | TVar "UInt" -> "u32"
     | TVar "Float" -> "f32"
@@ -113,7 +105,7 @@ module WGSL : S = struct
     | other -> Printf.sprintf "return %s;" (compile_expr other)
 
   (* Compile an expression to WGSL *)
-  and compile_expr : Ir.t -> expr = function
+  and compile_expr : Ir.t -> string = function
     | Var name -> var name
     | App (f, x) -> app f (String.concat ", " @@ List.map compile_expr x)
     | Infix (left, op, right) ->
@@ -123,8 +115,6 @@ module WGSL : S = struct
     | Let (ident, ty_opt, value, body) ->
       (match ty_opt with
        | TFunction _ ->
-         (* WGSL doesn't support first-class functions, so we inline function bindings *)
-         (* Replace all occurrences of `ident` in `body` with direct calls to `value` *)
          let inline_function_calls expr =
            let rec subst : Ir.t -> Ir.t = function
              | Var name when name = ident -> value
@@ -153,6 +143,7 @@ module WGSL : S = struct
         (compile_expr t)
         (compile_expr f)
         (compile_expr scrut)
+    | Match _ -> failwith "TODO"
     | Proj (term, field) -> proj (compile_expr term) field
     | Lit (Int n) -> int n
     | Lit (UInt n) -> uint n
@@ -163,11 +154,11 @@ module WGSL : S = struct
       let compiled_fields =
         List.map (fun (name, expr) -> name, compile_expr expr) fields
       in
-      record "UnknownStruct" compiled_fields
+      record_literal "UnknownStruct" compiled_fields
   ;;
 
   (* Compile a top-level declaration *)
-  let compile_declaration : Ir.declaration -> declaration = function
+  let compile_declaration : Ir.declaration -> string = function
     | Function { ident; args; returns; body } ->
       let annotation (x, t) = Printf.sprintf "%s: %s" x t in
       let args =
@@ -192,5 +183,102 @@ module WGSL : S = struct
   (* Main compilation entry point *)
   let compile (decls : Ir.declaration list) : string =
     List.map compile_declaration decls |> emit |> Fun.flip String.cat "\n"
+  ;;
+end
+
+module Javascript : S = struct
+  let standard_library =
+    [ "Int", Env.Typed (`Var "Int", `Type)
+    ; ( "+"
+      , Env.Typed
+          ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "+", x), y)))
+          , `Pi
+              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Int"))))
+          ) )
+    ; ( "-"
+      , Env.Typed
+          ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "-", x), y)))
+          , `Pi
+              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Int"))))
+          ) )
+    ; ( "succ"
+      , Env.Typed
+          ( `Lam ("x", fun x -> `App (`App (`Var "+", x), `Lit (Int 1)))
+          , `Pi ("_", `Var "Int", fun _ -> `Var "Int") ) )
+    ; ( "<"
+      , Env.Typed
+          ( `Lam ("a", fun a -> `Lam ("b", fun b -> `App (`App (`Var "<", a), b)))
+          , `Pi
+              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Bool"))))
+          ) )
+    ]
+  ;;
+
+  let map_types = []
+  let native_infix = [ "+"; "-"; "*"; "/"; "<" ]
+  let var = Fun.id
+  let int = string_of_int
+  let uint n = string_of_int n ^ "u"
+  let float = string_of_float
+  let bool = string_of_bool
+  let app f x = Printf.sprintf "%s(%s)" f x
+  let let_ ident value body = Printf.sprintf "const %s = %s;\n%s" ident value body
+
+  let record_literal fields =
+    Printf.sprintf
+      "{\n%s\n}"
+      (String.concat ",\n  "
+       $ List.map (fun (ident, expr) -> Printf.sprintf "%s: %s" ident expr) fields)
+  ;;
+
+  let proj term field = Printf.sprintf "%s.%s" term field
+  let emit = String.concat "\n"
+
+  (* Add return to the innermost expression in a function body *)
+  let rec add_return_to_final_expr : Ir.t -> string = function
+    | Let (ident, _, value, body) ->
+      let_ ident (compile_expr value) (add_return_to_final_expr body)
+    | other -> Printf.sprintf "return %s;" (compile_expr other)
+
+  and compile_expr : Ir.t -> string = function
+    | Var name -> var name
+    | App (f, x) -> app f (String.concat ", " @@ List.map compile_expr x)
+    | Infix (left, op, right) ->
+      let left_expr = compile_expr left in
+      let right_expr = compile_expr right in
+      Printf.sprintf "%s %s %s" left_expr op right_expr
+    | Let (ident, _, value, body) -> let_ ident (compile_expr value) (compile_expr body)
+    | If (scrut, t, f) ->
+      Printf.sprintf "%s ? %s : %s" (compile_expr scrut) (compile_expr t) (compile_expr f)
+    | Match _ -> failwith "TODO"
+    | Proj (term, field) -> proj (compile_expr term) field
+    | Lit (Int n) -> int n
+    | Lit (UInt n) -> uint n
+    | Lit (Float x) -> float x
+    | Lit (Bool b) -> bool b
+    | Lit (Record fields) ->
+      let compiled_fields =
+        List.map (fun (name, expr) -> name, compile_expr expr) fields
+      in
+      record_literal compiled_fields
+  ;;
+
+  (* Compile a top-level declaration *)
+  let compile_declaration : Ir.declaration -> string = function
+    | Function { ident; args; body; _ } ->
+      let args = String.concat ", " @@ List.map fst args in
+      let body = add_return_to_final_expr body in
+      Printf.sprintf "const %s = (%s) => {\n  %s\n}" ident args body
+    | Constant { ident; value; _ } ->
+      Printf.sprintf "const %s = %s;\n" ident (compile_expr value)
+    | RecordType _ -> ""
+  ;;
+
+  (* Main compilation entry point *)
+  let compile (decls : Ir.declaration list) : string =
+    List.map compile_declaration decls
+    |> emit
+    |> Fun.flip String.cat "\n"
+    |> Fun.flip String.cat "\n\nconsole.log(main())"
   ;;
 end

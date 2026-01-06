@@ -1,4 +1,4 @@
 (executable
  (public_name fingerpaint)
  (name main)
- (libraries fingerpaint))
+ (libraries fingerpaint cmdliner))

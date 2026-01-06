@@ -54,7 +54,7 @@ let rec force : value -> value = function
 ;;
 
 let force_row (r : row) : row =
-  { fields = List.map (fun (l, v) -> l, force v) r.fields; tail = force r.tail }
+  { fields = List.map (fun (l, v) -> l, force v) r.fields; tail = Option.map force r.tail }
 ;;
 
 let rec occurs (m : Meta.t) (v : value) : bool = 
@@ -80,7 +80,7 @@ and occurs_neutral m = function
   | _ -> false
 
 and occurs_row m r = 
-  List.exists (fun v -> occurs m @@ snd v) r.fields || occurs m r.tail
+  List.exists (fun v -> occurs m @@ snd v) r.fields || is_some_and (occurs m) r.tail
 
 and occurs_lit m = function 
   Record fields -> List.exists (fun v -> occurs m @@ snd v) fields 
@@ -125,13 +125,6 @@ let rec unify  : value -> value -> (unit, Error.t) result = fun a b ->
   | `Rec l, `Rec r -> 
       Constraints.(tell $ Unify (l, r)); 
       Ok ()
-  | `RowNil, `RowNil -> Ok ()
-  | `Row { fields = []; tail }, `RowNil -> 
-      Constraints.(tell $ Unify (tail, `RowNil));
-      Ok ()
-  | `RowNil, `Row { fields = _ :: _; _ }
-  | `Row { fields = _ :: _; _}, `RowNil -> 
-      Error (`Expected (Pretty.value a, Pretty.value b))
   | `Err _, _ | _, `Err _ -> Ok ()
   | _,_ -> Error `Todo
 
@@ -182,9 +175,13 @@ and unify_rows  : row -> row -> (unit, Error.t) result =  fun l r ->
   let only_left  = M.filter (fun k _ -> not (M.mem k right_fields)) left_fields |> M.bindings in
   let only_right = M.filter (fun k _ -> not @@ M.mem k left_fields) right_fields |> M.bindings in 
 
-  let fresh_tail = `Neutral (NMeta (Meta.fresh ())) in
-  Constraints.(tell $ Unify (l.tail, `Row { fields = only_right; tail = fresh_tail }));
-  Constraints.(tell $ Unify (r.tail, `Row { fields = only_left; tail = fresh_tail }));
+  let tail_meta = `Neutral (NMeta (Meta.fresh ())) in
+  let tail = Some tail_meta  in
+  Option.iter (fun (l, r) -> 
+    Constraints.(tell $ Unify (l, `Row { fields = only_right; tail }));
+    Constraints.(tell $ Unify (r, `Row { fields = only_left; tail }));
+  ) (Tuple.into <$> l.tail <*> r.tail);
+
   Ok ()
 
 and vapp = fun f x -> 
@@ -224,16 +221,10 @@ and solve_record : Ident.t -> value -> value -> bool = fun label record field ->
         begin 
           match force row_val with 
           | `Row r -> 
-              begin 
-                match List.assoc_opt label r.fields with 
-                | Some ty -> 
+                Option.iter (fun ty -> 
                     Constraints.(tell $ Unify (field, ty));
-                    true 
-                | None -> 
-                  let tail = `Neutral (NMeta (Meta.fresh ())) in 
-                  Constraints.(tell $ Unify (r.tail, `Row { fields = [label, field]; tail }));
-                  true
-              end
+  ) (List.assoc_opt label r.fields);
+  true
           | `Neutral (NMeta _) -> 
               Constraints.(tell @@ HasField (label, record, field));
               false

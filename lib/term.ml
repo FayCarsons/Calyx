@@ -105,7 +105,7 @@ let rec desugar : cst -> ast = function
     let cond = desugar cond
     and t = desugar t
     and f = desugar f in
-    `Match (cond, [ PCtor ("True", []), t; PCtor ("False", []), f ])
+    `Match (cond, [ PVar "True", t; PVar "False", f ])
   | #base as b -> (over_base desugar b :> ast)
   | #term_binders as binder -> (over_term_binders desugar binder :> ast)
 ;;
@@ -117,13 +117,12 @@ type value =
   | `Pi of Ident.t * value * (value -> value)
   | `Neutral of neutral
   | `Row of row (* Known fields *)
-  | `RowNil (* Empty or closed row *)
   | `Rec of value
   ]
 
 and row =
   { fields : (Ident.t * value) list
-  ; tail : value
+  ; tail : value option
   }
 
 and neutral =

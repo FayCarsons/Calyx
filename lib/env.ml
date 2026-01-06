@@ -14,18 +14,27 @@ let typ : entry -> Term.value option = function
 
 type t =
   { mutable bindings : (Ident.t * entry) list
+  ; mutable types : Ident.t list
   ; mutable pos : Pos.t
   ; mutable level : int
   }
 
 let default () =
-  { bindings = []; pos = { filename = "<TEST>"; line = 0L; col = 0L }; level = 0 }
+  { bindings = []
+  ; types = []
+  ; pos = { filename = "<TEST>"; line = 0L; col = 0L }
+  ; level = 0
+  }
 ;;
 
 type _ Effect.t +=
   | Lookup : Ident.t -> entry Effect.t
-  | Pushy : (Ident.t * entry) -> unit Effect.t
+  | Push : (Ident.t * entry) -> unit Effect.t
   | Pop : unit -> unit Effect.t
+  | (* Try to find a type with the same structure *)
+      LookupTypeName :
+      (Ident.t * Term.value) list
+      -> Ident.t option Effect.t
   | SetPos : Pos.t -> unit Effect.t
   | GetPos : Pos.t Effect.t
   | Level : int Effect.t
@@ -40,7 +49,7 @@ let level () = Effect.perform Level
 
 let local : Ident.t -> entry -> (unit -> 'a) -> 'a =
   fun ident entry f ->
-  Effect.perform (Pushy (ident, entry));
+  Effect.perform (Push (ident, entry));
   Fun.protect f ~finally:(fun () -> Effect.perform (Pop ()))
 ;;
 
@@ -90,11 +99,26 @@ let handle ?(env = default ()) (f : unit -> 'a) : 'a =
                 match List.assoc_opt ident env.bindings with
                 | Some entry -> continue k entry
                 | None -> failwith @@ Printf.sprintf "Variable %s not in scope" ident)
-          | Pushy (ident, binding) ->
+          | LookupTypeName fields ->
             Some
               (fun k ->
-                print_endline "PUSH";
+                print_endline "LOOKUP TYPENAME";
+                continue k
+                @@ List.find_opt
+                     (fun ident ->
+                        match List.assoc_opt ident env.bindings with
+                        | Some (Typed (`Row { fields = fields'; _ }, `Type)) ->
+                          fields = fields'
+                        | _ -> false)
+                     env.types)
+          | Push (ident, binding) ->
+            Printf.printf "Push binding for '%s'\n" ident;
+            Some
+              (fun k ->
                 env.bindings <- (ident, binding) :: env.bindings;
+                (match binding with
+                 | Typed (_, `Type) -> env.types <- ident :: env.types
+                 | _ -> ());
                 continue k ())
           | Pop _ ->
             Some

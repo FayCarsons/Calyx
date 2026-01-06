@@ -36,13 +36,12 @@ and zonk_value : Term.value -> Term.value = function
     `Match (zonk_value scrut, List.map (fun (p, e) -> p, zonk_value e) arms)
   | `Row r -> `Row (zonk_row r)
   | `Rec v -> `Rec (zonk_value v)
-  | `RowNil -> `RowNil
   | t -> t
 
 and zonk_row : Term.row -> Term.row =
   fun row ->
   { fields = List.map (fun (l, v) -> l, zonk_value v) row.fields
-  ; tail = zonk_value row.tail
+  ; tail = Option.map zonk_value row.tail
   }
 ;;
 

@@ -1,5 +1,6 @@
 let ( $ ) = ( @@ )
 let ( let* ) = Result.bind
+let ( and* ) = Result.bind
 let ( >>= ) = Result.bind
 let ( >>| ) = Result.map
 let ( <$> ) = Option.map
@@ -16,6 +17,22 @@ let ( <*> ) f x =
 let is_some_and (f : 'a -> bool) : 'a option -> bool = function
   | Some x -> f x
   | None -> false
+;;
+
+let rec windows len = function
+  | _ :: _ as xs -> List.take len xs :: windows len (List.tl xs)
+  | [] -> []
+;;
+
+let rec pairs = function
+  | x :: (y :: _ as rest) -> (x, y) :: pairs rest
+  | _ -> []
+;;
+
+let rec sequence = function
+  | Ok x :: xs -> Result.map (List.cons x) $ sequence xs
+  | [] -> Ok []
+  | Error e :: _ -> Error e
 ;;
 
 module Tuple = struct

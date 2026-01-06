@@ -32,6 +32,7 @@ type t =
   | App of Ident.t * t list
   | Let of Ident.t * ty * t * t
   | If of t * t * t
+  | Match of t * (pattern * t) list
   | Proj of t * Ident.t
   | Infix of t * Ident.t * t
 
@@ -40,7 +41,10 @@ and literal =
   | UInt of int
   | Float of float
   | Bool of bool
+  (* TODO: This should hold an optional type name *)
   | Record of (Ident.t * t) list
+
+and pattern
 
 type declaration =
   | Function of
@@ -70,6 +74,11 @@ module PrettyIR = struct
       Printf.sprintf "let %s: %s = %s in\n%s" ident (ir_ty ty) (ir value) (ir body)
     | If (scrut, t, f) ->
       Printf.sprintf "if %s then\n\t%s\nelse\n\t%s" (ir scrut) (ir t) (ir f)
+    | Match (scrut, arms) -> 
+        let fmt_arm (pat, exp) = 
+          Printf.sprintf "| %s -> %s" pat exp in
+        let arms = String.concat "\n" @@ List.map (Fun.compose fmt_arm (Util.Tuple.bimap ir_pattern ir)) arms in
+        Printf.sprintf "match %s with\n%s" (ir scrut) arms
     | Proj (tm, field) -> Printf.sprintf "%s.%s" (ir tm) field
     | Infix (left, op, right) -> Printf.sprintf "%s %s %s" (ir left) op (ir right)
 
@@ -91,6 +100,8 @@ module PrettyIR = struct
         (ir_ty returns)
     | TApp (f, xs) -> String.concat " " @@ (ir_ty f :: List.map ir_ty xs)
     | Skolem -> "<Skolem>"
+
+  and ir_pattern : pattern -> string = fun _ -> ""
   ;;
 
   let declaration : declaration -> string = function 
@@ -120,7 +131,6 @@ end
 open Util
 
 (* Shared lambda lifting utilities *)
-
 
 let rec convert_expr : Term.ast -> t = function
   | `Var v -> 
@@ -168,7 +178,6 @@ let rec convert_expr : Term.ast -> t = function
     convert_expr tm
   | `Ann (`Lam (x, body), pi_type) ->
     print_endline "IR.convert_expr.Ann(Lam, _)";
-    print_endline "Trigger lambda lift";
     convert_lambda_to_function pi_type x body
   | `Ann (x, _type) -> 
     print_endline "IR.convert_expr.Ann";

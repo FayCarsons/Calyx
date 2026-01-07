@@ -1,4 +1,4 @@
 (executable
  (public_name calyx)
  (name main)
- (libraries calyx cmdliner))
+ (libraries calyx cmdliner core))

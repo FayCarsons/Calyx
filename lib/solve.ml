@@ -65,9 +65,10 @@ let rec force : value -> value = function
     (match Env.lookup_value ident with 
     | Some (`Var ident' | `Neutral (NVar (_, ident')) as v') -> 
       if Ident.equal ident ident' then 
-        v 
+        v  (* Self-referential, keep as is *)
       else 
         force v'
+    | Some (`Opaque) -> v  (* Don't resolve opaque types, keep as NVar *)
     | _ -> v)
   | v -> v
 ;;
@@ -140,6 +141,11 @@ let rec unify  : value -> value -> (unit, Error.t) result = fun a b ->
       Constraints.(tell $ Unify (dom, dom'));
       Constraints.(tell $ Unify (cod var, cod' var));
       Ok ()
+  | `Neutral (NVar (_, name)), `Var name' 
+  | `Var name, `Neutral (NVar (_, name')) when Ident.equal name name' -> Ok()
+  | `Neutral (NVar (l_level, l_name)), `Neutral (NVar (r_level, r_name)) -> 
+      if Int.equal l_level r_level && String.equal l_name r_name then Ok ()
+      else Error (`UnificationFailure (Pretty.neutral (NVar (l_level, l_name)), Pretty.neutral (NVar (r_level, r_name))))
   | `Neutral l, `Neutral r -> unify_neutral l r 
   | `Lit l, `Lit r -> unify_lit l r 
   | `Err _, _ | _, `Err _ -> Ok ()

@@ -1,0 +1,33 @@
+# Claude Code development file
+CLAUDE.md
+
+# OCaml/Dune build artifacts
+_build/
+*.install
+*.merlin
+.merlin
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Output files
+*.js.map
+test.js
+.calyx/

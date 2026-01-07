@@ -116,8 +116,12 @@ type value =
   | `Lam of Ident.t * (value -> value)
   | `Pi of Ident.t * value * (value -> value)
   | `Neutral of neutral
-  | `Row of row (* Known fields *)
+  | (* TODO: These suck, this was not the way to implement structural record types 
+      We should just have literals, which can exist in the type position 
+    *)
+    `Row of row
   | `Rec of value
+  | `Opaque
   ]
 
 and row =
@@ -147,11 +151,6 @@ type 'a declaration =
       ; params : (Ident.t * 'a) list
       ; fields : (Ident.t * 'a) list
       }
-(* | Extern of *)
-(*     { ident : Ident.t *)
-(*     ; typ : 'a *)
-(*     ; platform : platform *)
-(*     } *)
 
 and platform = Javascript
 

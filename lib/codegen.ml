@@ -15,7 +15,7 @@ end
 
 module WGSL : S = struct
   let standard_library =
-    [ "Int", Env.Typed (`Var "Int", `Type)
+    [ "Int", Env.Typed (`Opaque, `Type)
     ; ( "+"
       , Env.Typed
           ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "+", x), y)))
@@ -188,9 +188,9 @@ end
 
 module Javascript : S = struct
   let standard_library =
-    [ "Int", Env.Typed (`Var "Int", `Type)
-    ; "Bool", Env.Typed (`Var "Bool", `Type)
-    ; "Unit", Env.Typed (`Var "Unit", `Type)
+    [ "Int", Env.Typed (`Opaque, `Type)
+    ; "Bool", Env.Typed (`Opaque, `Type)
+    ; "Unit", Env.Typed (`Opaque, `Type)
     ; ( "+"
       , Env.Typed
           ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "+", x), y)))

@@ -74,6 +74,7 @@ let rec value : value -> string = function
   | `Row { fields; tail } -> record value fields ~tail
   | `Rec row -> value row
   | `Ann (`Ann (x, t), _) -> base value (`Ann (x, t))
+  | `Opaque -> "<opaque>"
   | #base as other -> base value (other :> value base)
 
 and neutral : neutral -> string = function

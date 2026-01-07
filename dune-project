@@ -23,16 +23,14 @@
   ocaml
   dune
   angstrom
-  sedlex
   ppx_deriving
   ppx_sexp_conv
-  sexplib
-  base
+  core
   stdio
   fmt
   cmdliner
-  (alcotest :with-test)
-  (qcheck :with-test))
+  (ppx_inline_test :with-test)
+  (ppx_expect :with-test))
  (tags
   (compiler parser "parser-combinator" ocaml)))
 

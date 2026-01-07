@@ -10,7 +10,11 @@ let over_literal (f : 'a -> 'b) : 'a Term.literal -> 'b Term.literal = function
 ;;
 
 let rec eval : Term.ast -> Term.value = function
-  | `Var name -> Env.lookup_value name |> Option.get
+  | `Var name ->
+    (match Env.lookup_value name with
+     | Some `Opaque -> `Neutral (NVar (Env.level (), name))
+     | Some other -> other
+     | None -> failwith @@ Printf.sprintf "No variable '%s' in scope" name)
   | `Ann (e, _) -> eval e
   | `Type -> `Type
   | `Pi (x, dom, cod) ->
@@ -79,6 +83,8 @@ let rec quote (lvl : int) : Term.value -> Term.ast = function
   | `Row { fields; tail = Some (`Neutral (NMeta _)) } ->
     let fields = List.map (Tuple.second (quote lvl)) fields in
     `Lit (Record fields)
+  | `Opaque ->
+    failwith "Cannot quote opaque values - they should not appear in quotable contexts"
   | #base as b -> (Term.over_base (quote lvl) b :> Term.ast)
   | otherwise -> failwith (Printf.sprintf "Cannot handle '%s'" $ Pretty.value otherwise)
 
@@ -89,6 +95,9 @@ and quote_neutral (lvl : int) : neutral -> Term.ast = function
   | NProj (term, field) -> `Proj (quote_neutral lvl term, field)
 ;;
 
+(* TODO: Somewhere in here we are creating a Unify constraint for `Type vs `Var "Int" 
+   which is causing erroneous type errors
+*)
 let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
   | `Var i ->
     print_endline "infer.Var";
@@ -348,7 +357,9 @@ let infer_toplevel
         | Ok program ->
           (match Solve.solve constraints with
            | Ok () -> Ok program
-           | Error es -> failwith (Solve.pretty_solver_error es))
+           | Error es ->
+             print_endline (Solve.pretty_solver_error es);
+             failwith "Failed to type program")
         | Error es -> Error es))
   in
   Result.map (Tuple.intoRev gen) result

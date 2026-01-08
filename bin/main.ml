@@ -5,8 +5,8 @@ type backend =
   | JS
 
 let impl_of_backend = function
-  | WGSL -> (module Fingerpaint.Codegen.WGSL : Fingerpaint.Codegen.S)
-  | JS -> (module Fingerpaint.Codegen.Javascript : Fingerpaint.Codegen.S)
+  | WGSL -> (module Calyx.Codegen.WGSL : Calyx.Codegen.S)
+  | JS -> (module Calyx.Codegen.Javascript : Calyx.Codegen.S)
 ;;
 
 let backend_of_string = function
@@ -17,7 +17,7 @@ let backend_of_string = function
 
 let compile backend path =
   let module_backend = impl_of_backend backend in
-  let codegen = Fingerpaint.Runner.compile module_backend path in
+  let codegen = Calyx.Runner.compile module_backend path in
   print_endline "COMPILED OUTPUT:";
   print_endline codegen
 ;;
@@ -40,7 +40,7 @@ let backend =
 
 let compile_cmd =
   let doc = "Compile Calyx source to target backend" in
-  let info = Cmd.info "fingerpaint" ~doc in
+  let info = Cmd.info "calyx" ~doc in
   Cmd.v info Term.(const compile $ backend $ path)
 ;;
 

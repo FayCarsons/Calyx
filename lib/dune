@@ -1,6 +1,6 @@
 (library
- (public_name fingerpaint)
- (name fingerpaint)
+ (public_name calyx)
+ (name calyx)
  (libraries angstrom base stdio fmt)
  (preprocess
   (pps ppx_deriving.show ppx_sexp_conv)))

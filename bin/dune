@@ -1,4 +1,4 @@
 (executable
- (public_name fingerpaint)
+ (public_name calyx)
  (name main)
- (libraries fingerpaint cmdliner))
+ (libraries calyx cmdliner))

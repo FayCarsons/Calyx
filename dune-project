@@ -1,6 +1,6 @@
 (lang dune 3.19)
 
-(name fingerpaint)
+(name calyx)
 
 (generate_opam_files true)
 
@@ -16,7 +16,7 @@
 (documentation https://url/to/documentation)
 
 (package
- (name fingerpaint)
+ (name calyx)
  (synopsis "A compiler written in OCaml")
  (description "A small compiler project using parser combinators and OCaml")
  (depends

@@ -80,7 +80,6 @@ let fresh_var : Ident.t -> Term.value -> (Term.value -> 'a) -> 'a =
 
 let handle ?(env = default ()) (f : unit -> 'a) : 'a =
   let open Effect.Deep in
-  print_endline "Env.handle";
   (* *Do not touch*
      For whatever ungodly reason we *have* to use 'try_with' here as opposed 
      to the syntax sugar for effects, otherwise some effects (I think only if 
@@ -96,17 +95,17 @@ let handle ?(env = default ()) (f : unit -> 'a) : 'a =
           | Level ->
             Some
               (fun (k : (a, _) continuation) ->
-                print_endline "LEVEL";
+                (* print_endline "LEVEL"; *)
                 continue k env.level)
           | Lookup ident ->
             Some
               (fun k ->
-                print_endline "LOOKUP";
+                (* print_endline "LOOKUP"; *)
                 continue k @@ List.assoc_opt ident env.bindings)
           | LookupTypeName fields ->
             Some
               (fun k ->
-                print_endline "LOOKUP TYPENAME";
+                (* print_endline "LOOKUP TYPENAME"; *)
                 continue k
                 @@ List.find_opt
                      (fun ident ->
@@ -127,19 +126,19 @@ let handle ?(env = default ()) (f : unit -> 'a) : 'a =
           | Pop _ ->
             Some
               (fun k ->
-                print_endline "POP";
+                (* print_endline "POP"; *)
                 env.bindings <- List.tl env.bindings;
                 continue k ())
           | SetPos pos ->
             Some
               (fun k ->
-                print_endline "SET_POS";
+                (* print_endline "SET_POS"; *)
                 env.pos <- pos;
                 continue k ())
           | GetPos ->
             Some
               (fun k ->
-                print_endline "GET_POS";
+                (* print_endline "GET_POS"; *)
                 continue k env.pos)
           | _ -> None (* Re-raise unhandled effects *))
     }

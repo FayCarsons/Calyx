@@ -201,31 +201,20 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
     Ok (`Err e, `Err e)
   | `Infix { left; op; right } ->
     print_endline "infer.Infix";
-    (* Type check as regular application but preserve infix structure *)
-    let* left_type, left = infer left in
-    let* op_type, op = infer op in
-    let* right_type, right = infer right in
-    (match op_type with
-     | `Pi (_, dom, cod) ->
-       let var = `Neutral (NVar (0, "_")) in
-       let cod = cod var in
-       (match cod with
-        | `Pi (_, dom', _) ->
-          let left_type = quote 0 left_type
-          and right_type = quote 0 right_type
-          and op_type = quote 0 op_type in
-          let* _ = check left_type dom in
-          let* _ = check right_type dom' in
-          let result =
-            `Infix
-              { left = `Ann (left, left_type)
-              ; op = `Ann (op, op_type)
-              ; right = `Ann (right, right_type)
-              }
-          in
-          Ok (cod, result)
-        | other -> Error (`Expected ("function", Pretty.value other)))
-     | other -> Error (`Expected ("function", Pretty.value other)))
+    (* Convert infix to nested application for type checking *)
+    let app_expr = `App (`App (op, left), right) in
+    let* ty, checked_app = infer app_expr in
+    (* Extract the typed sub-expressions and reconstruct infix *)
+    (match checked_app with
+     | `Ann (`App (`App (op', left'), right'), result_ty) ->
+       let infix_expr = `Infix { left = left'; op = op'; right = right' } in
+       Ok (ty, `Ann (infix_expr, result_ty))
+     | _ -> 
+       (* This shouldn't happen, but if it does, try to preserve structure *)
+       let* _, left' = infer left in
+       let* _, op' = infer op in
+       let* _, right' = infer right in
+       Ok (ty, `Infix { left = left'; op = op'; right = right' }))
 
 and infer_lit
   : Term.ast Term.literal -> (Term.value * Term.ast Term.literal, Error.t) result

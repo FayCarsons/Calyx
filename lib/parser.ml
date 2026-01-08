@@ -118,7 +118,7 @@ let looks_like_operator s = (not (Int.equal (String.length s) 0)) && is_op_char 
 
 let var_ident =
   lexeme
-  $
+  @@
   let* first = satisfy is_lower in
   let* rest = take_while is_ident_char in
   let name = String.make 1 first ^ rest in
@@ -127,7 +127,7 @@ let var_ident =
 
 let ctor_ident =
   lexeme
-  $
+  @@
   let* first = satisfy is_upper in
   let* rest = take_while is_ident_char in
   let name = String.make 1 first ^ rest in
@@ -208,27 +208,25 @@ let record_lit (expr : Term.cst t) : Term.cst t =
 let expr : Term.cst t =
   let prec_map = Prec.from_list [] in
   fix (fun expr ->
-    (* === ATOMS: Only recurse through parens === *)
     let atom =
       lexeme
       @@ choice
-           [ (* Parenthesized expression - this is where expr recurses safely *)
-             char '(' *> ws *> expr <* ws <* char ')'
+           [ char '(' *> ws *> expr <* ws <* char ')'
            ; mkvar <$> var_ident
            ; mkvar <$> ctor_ident
            ; bool_lit
-           ; float_lit (* must come before int_lit *)
+           ; float_lit
            ; int_lit
            ; record_lit expr
            ]
     in
-    (* === APPLICATION: One or more atoms, left-associative === *)
+    (* App: f x *)
     let app =
       let* head = atom in
       let* tail = many atom in
       pure @@ List.fold_left (fun f x -> `App (f, x)) head tail
     in
-    (* === INFIX: Pratt-style precedence climbing over applications === *)
+    (* Infix: 1 + x *)
     let infix_expr =
       let rec go min_prec left =
         let* c = peek_char in

@@ -1,0 +1,196 @@
+%{
+open Term
+
+let make_var (s : string) : Term.cst = `Var (Ident.mk s)
+let make_infix left op right = 
+  `Infix { left; op = `Var (Ident.mk op); right }
+%}
+
+/* Tokens */
+%token <int> INT
+%token <float> FLOAT  
+%token <string> STRING
+%token <string> IDENT
+%token <string> OPERATOR
+%token <bool> BOOL
+
+/* Keywords */
+%token DEF DO END IF THEN ELSE LET IN MATCH WITH
+%token TYPE DATA WHERE CONST
+
+/* Delimiters */
+%token LPAREN RPAREN
+%token LBRACE RBRACE
+%token LBRACKET RBRACKET
+%token ARROW FAT_ARROW EQUALS COLON COMMA SEMICOLON PIPE BACKSLASH DOT
+%token EOF
+
+%start <Term.cst Term.declaration list> program
+%start <Term.cst> expr_top
+
+%%
+
+(* Use Menhir's standard library functions for cleaner grammar *)
+
+let program := 
+  | decls = list(declaration); EOF; { decls }
+
+let declaration :=
+  | def_decl
+  | let_decl  
+  | data_decl
+
+let def_decl :=
+  | DEF; name = IDENT; params = list(param); 
+    ret = option(preceded(ARROW, type_expr)); 
+    DO; body = expr; option(END); {
+      let rec build_lam params body =
+        match params with
+        | [] -> body
+        | (x, _) :: rest -> `Lam (x, build_lam rest body)
+      in
+      let rec build_type params ret =
+        match params with
+        | [] -> Option.value ~default:`Type ret
+        | (x, ty) :: rest ->
+            `Pi (x, ty, build_type rest ret)
+      in
+      let body_with_params = build_lam params body in
+      let typ = build_type params ret in
+      Function { ident = Ident.mk name; typ; body = body_with_params }
+    }
+
+let let_decl := 
+  | LET; name = IDENT; ty = option(preceded(COLON, type_expr)); 
+    EQUALS; value = expr; {
+      let typ = Option.value ~default:`Type ty in
+      Constant { ident = Ident.mk name; typ; body = value }
+    }
+
+let data_decl :=
+  | DATA; name = IDENT; params = list(type_param); WHERE; 
+    fields = list(constructor); option(END); {
+      let params = List.map (fun (x, ty) -> (Ident.mk x, ty)) params in
+      let fields = List.map (fun (n, t) -> (Ident.mk n, t)) fields in
+      RecordDecl { ident = Ident.mk name; params; fields }
+    }
+
+let type_param :=
+  | LPAREN; x = IDENT; COLON; ty = type_expr; RPAREN; { (x, ty) }
+
+let constructor :=
+  | option(PIPE); name = IDENT; COLON; ty = type_expr; { (name, ty) }
+
+let param :=
+  | LPAREN; x = IDENT; COLON; ty = type_expr; RPAREN; { (x, ty) }
+  | x = IDENT; { (x, `Type) }
+
+(* Type expressions *)
+let type_expr :=
+  | type_arrow
+
+let type_arrow :=
+  | t = type_atom; { t }
+  | t1 = type_atom; ARROW; t2 = type_arrow; { 
+      `Pi (Ident.mk "_", t1, t2) 
+    }
+  | LPAREN; x = IDENT; COLON; t1 = type_expr; RPAREN; ARROW; t2 = type_arrow; {
+      `Pi (Ident.mk x, t1, t2)
+    }
+
+let type_atom :=
+  | x = IDENT; { make_var x }
+  | LPAREN; ty = type_expr; RPAREN; { ty }
+
+let expr_top :=
+  | e = expr; EOF; { e }
+
+(* Expressions *)
+let expr :=
+  | expr_let
+  | expr_if
+  | expr_match
+  | expr_lambda
+  | expr_ann
+
+let expr_let :=
+  | LET; x = IDENT; ty = option(preceded(COLON, type_expr)); 
+    EQUALS; v = expr; IN; body = expr; {
+      `Let (Ident.mk x, ty, v, body)
+    }
+
+let expr_if :=
+  | IF; cond = expr; THEN; t = expr; ELSE; f = expr; {
+      `If (cond, t, f)
+    }
+
+let expr_match :=
+  | MATCH; e = expr; WITH; arms = match_arms; option(END); {
+      `Match (e, arms)
+    }
+
+let match_arms :=
+  | option(PIPE); arms = separated_nonempty_list(PIPE, match_arm); { arms }
+
+let match_arm :=
+  | p = pattern; ARROW; e = expr; { (p, e) }
+
+let pattern :=
+  | pattern_app
+
+let pattern_app :=
+  | x = IDENT; ps = nonempty_list(pattern_atom); { 
+      PCtor (Ident.mk x, ps) 
+    }
+  | p = pattern_atom; { p }
+
+let pattern_atom :=
+  | x = IDENT; { PVar (Ident.mk x) }
+  | i = INT; { PLit (Int i) }
+  | b = BOOL; { PLit (Bool b) }
+  | LPAREN; p = pattern; RPAREN; { p }
+
+let expr_lambda :=
+  | BACKSLASH; params = nonempty_list(IDENT); ARROW; body = expr; {
+      let rec build_lam = function
+        | [] -> body
+        | x :: xs -> `Lam (Ident.mk x, build_lam xs)
+      in
+      build_lam params
+    }
+
+let expr_ann :=
+  | e = expr_infix; COLON; ty = type_expr; { `Ann (e, ty) }
+  | expr_infix
+
+let expr_infix :=
+  | e = expr_app; { e }
+  | left = expr_app; op = OPERATOR; right = expr_infix; {
+      make_infix left op right
+    }
+
+let expr_app :=
+  | f = expr_app; arg = expr_proj; { `App (f, arg) }
+  | expr_proj
+
+let expr_proj :=
+  | e = expr_proj; DOT; field = IDENT; { 
+      `Proj (e, Ident.mk field) 
+    }
+  | expr_atom
+
+let expr_atom :=
+  | i = INT; { `Lit (Int i) }
+  | f = FLOAT; { `Lit (Float f) }
+  | b = BOOL; { `Lit (Bool b) }
+  | x = IDENT; { make_var x }
+  | LPAREN; e = expr; RPAREN; { e }
+  | LBRACE; fields = record_fields; RBRACE; { `Lit (Record fields) }
+
+let record_fields :=
+  | fields = separated_list(COMMA, record_field); { fields }
+
+let record_field :=
+  | name = IDENT; EQUALS; value = expr; { 
+      (Ident.mk name, value) 
+    }

@@ -1,7 +1,14 @@
+module type M = sig
+    type t
+    val tell : t -> unit
+    val handle : (unit -> 'a) -> ('a * t list)
+end
+
 module Make (W : sig
     type t
-  end) =
+  end) : M with type t = W.t =
 struct
+  type t = W.t
   type _ Effect.t += Tell : W.t -> unit Effect.t 
 
   let tell x = Effect.perform (Tell x)

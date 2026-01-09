@@ -1,7 +1,13 @@
+(ocamllex lexer)
+
+(menhir
+ (modules parser)
+ (flags --dump --cmly --table))
+
 (library
  (public_name calyx)
  (name calyx)
- (libraries angstrom base fmt core)
+ (libraries angstrom base fmt core menhirLib)
  (preprocess
   (pps ppx_deriving.show ppx_sexp_conv ppx_inline_test ppx_expect))
  (inline_tests))

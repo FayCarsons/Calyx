@@ -36,6 +36,7 @@
             
             # Compiler-related libraries
             menhir
+            menhirLib
             sedlex
             ppx_deriving
             ppx_sexp_conv

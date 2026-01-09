@@ -6,14 +6,17 @@ module type StandardLibrary = sig
   val builtins : stage Term.declaration list
 end
 
-module type S = sig
+module type M = sig
   val standard_library : (Ident.t * Env.entry) list
   val map_types : (Ident.t * Ident.t) list
   val native_infix : Ident.t list
+  (** Command we can call to run generated code *)
+  val run_program : string option
+  val extension : string
   val compile : Ir.declaration list -> string
 end
 
-module WGSL : S = struct
+module WGSL : M = struct
   let standard_library =
     [ "Int", Env.Typed (`Opaque, `Type)
     ; ( "+"
@@ -29,6 +32,8 @@ module WGSL : S = struct
     ]
   ;;
 
+  let run_program = None
+  let extension = "wgsl"
   let map_types = [ "Int", "i32"; "UInt", "u32"; "Float", "f32" ]
   let native_infix = [ "+"; "-"; "*"; "/" ]
   let var = Fun.id
@@ -186,7 +191,7 @@ module WGSL : S = struct
   ;;
 end
 
-module Javascript : S = struct
+module Javascript : M = struct
   let standard_library =
     [ "Int", Env.Typed (`Opaque, `Type)
     ; "Bool", Env.Typed (`Opaque, `Type)
@@ -238,6 +243,8 @@ module Javascript : S = struct
     ]
   ;;
 
+  let run_program = Some "node"
+  let extension = "js"
   let map_types = []
   let native_infix = [ "+"; "-"; "*"; "/"; "<" ]
   let var = Fun.id
@@ -248,14 +255,7 @@ module Javascript : S = struct
   let app f x = Printf.sprintf "%s(%s)" f x
   let let_ ident value body = Printf.sprintf "const %s = %s;\n%s" ident value body
   let ternary scrut t f = Printf.sprintf "%s ? %s : %s" scrut t f
-  let if_ scrut t f = Printf.sprintf "if (%s) {\n  %s\n} else {\n  %s\n}\n" scrut t f
-
-  (* Essentially, 'can this be one arm of a JS ternary' *)
-  let rec is_expression : Ir.t -> bool = function
-    | Var _ | Proj _ | Lit _ | Infix _ -> true
-    | App (_, x) -> List.for_all is_expression x
-    | Let _ | If _ | Match _ -> false
-  ;;
+  (* We can always use ternaries in JavaScript *)
 
   let record_literal fields =
     Printf.sprintf
@@ -271,8 +271,7 @@ module Javascript : S = struct
   let rec add_return_to_final_expr : Ir.t -> string = function
     | Let (ident, _, value, body) ->
       let_ ident (compile_expr value) (add_return_to_final_expr body)
-    | other when is_expression other -> Printf.sprintf "return %s;" (compile_expr other)
-    | other -> compile_expr other
+    | other -> Printf.sprintf "return %s;" (compile_expr other)
 
   and compile_expr : Ir.t -> string = function
     | Var name -> var name
@@ -283,13 +282,8 @@ module Javascript : S = struct
       Printf.sprintf "%s %s %s" left_expr op right_expr
     | Let (ident, _, value, body) -> let_ ident (compile_expr value) (compile_expr body)
     | If (scrut, t, f) ->
-      if is_expression scrut && is_expression t && is_expression f
-      then (
-        let scrut, t, f = compile_expr scrut, compile_expr t, compile_expr f in
-        ternary scrut t f)
-      else (
-        let scrut, t, f = compile_expr scrut, compile_expr t, compile_expr f in
-        if_ scrut t f)
+      let scrut, t, f = compile_expr scrut, compile_expr t, compile_expr f in
+      ternary scrut t f
     | Match _ -> failwith "TODO"
     | Proj (term, field) -> proj (compile_expr term) field
     | Lit (Int n) -> int n
@@ -318,6 +312,7 @@ module Javascript : S = struct
   let compile (decls : Ir.declaration list) : string =
     List.map compile_declaration decls
     |> emit
+    |> String.cat "const print = x => console.log(x);\n\n"
     |> Fun.flip String.cat "\n"
     |> Fun.flip String.cat "\n\nconsole.log(main())"
   ;;

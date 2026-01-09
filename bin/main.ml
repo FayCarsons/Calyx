@@ -1,12 +1,13 @@
 open Core
+open Calyx
 
 type backend =
   | WGSL
   | JS
 
 let impl_of_backend = function
-  | WGSL -> (module Calyx.Codegen.WGSL : Calyx.Codegen.S)
-  | JS -> (module Calyx.Codegen.Javascript : Calyx.Codegen.S)
+  | WGSL -> (module Calyx.Codegen.WGSL : Calyx.Codegen.M)
+  | JS -> (module Calyx.Codegen.Javascript : Calyx.Codegen.M)
 ;;
 
 let backend_of_string = function
@@ -16,10 +17,10 @@ let backend_of_string = function
 ;;
 
 let compile backend path =
-  let module_backend = impl_of_backend backend in
-  let codegen = Calyx.Runner.compile module_backend path in
-  print_endline "COMPILED OUTPUT:";
-  print_endline codegen
+  let (module Backend : Codegen.M) = impl_of_backend backend in
+  let compiler_output = Runner.compile (module Backend) path in
+  Runner.output_to_file ~extension:Backend.extension ~compiler_output;
+  Option.iter Backend.run_program ~f:(fun cmd -> Runner.run_program (module Backend) cmd)
 ;;
 
 let path =

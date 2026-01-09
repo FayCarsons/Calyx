@@ -120,7 +120,7 @@ let expr_let :=
     }
 
 let expr_if :=
-  | IF; cond = expr; THEN; t = expr; ELSE; f = expr; {
+    | IF; cond = expr; THEN; t = expr; ELSE; f = expr; END; {
       `If (cond, t, f)
     }
 

@@ -30,10 +30,12 @@
             utop
             merlin
             fzf
-            
+
+            nodejs-slim_latest
+
             # Parser combinator libraries
             angstrom
-            
+
             # Compiler-related libraries
             menhir
             menhirLib
@@ -42,15 +44,9 @@
             ppx_sexp_conv
             sexplib
             base
+            core
             stdio
-            
-            # Testing and debugging
-            alcotest
-            qcheck
-            
-            # Pretty printing
-            fmt
-            
+
             # Command line parsing
             cmdliner
           ];

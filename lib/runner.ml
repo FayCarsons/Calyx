@@ -36,11 +36,40 @@ let parse_program (input : string) : (Term.cst Term.declaration list, string) re
   | Lexer.Lexing_error msg -> Error msg
 ;;
 
-let compile (module Backend : Codegen.S) path =
+let output_to_file ~extension ~compiler_output : unit =
+  let target_dir = ".calyx" in
+  (try Unix.mkdir target_dir 0o755 with
+   | Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+  let output_path = Filename.concat target_dir (Printf.sprintf "out.%s" extension) in
+  Core.Out_channel.write_all output_path ~data:compiler_output;
+  Printf.printf "Output written to: %s\n" output_path
+;;
+
+let run_program (module Backend : Codegen.M) (cmd : string) =
+  let output_path =
+    Filename.concat ".calyx" (Printf.sprintf "out.%s" Backend.extension)
+  in
+  let run_cmd = Printf.sprintf "%s %s 2>&1" cmd output_path in
+  Printf.printf "Running: %s\n" run_cmd;
+  (* Capture the output using Unix.open_process_in *)
+  let chan = Unix.open_process_in run_cmd in
+  let output = In_channel.input_all chan in
+  let exit_status = Unix.close_process_in chan in
+  match exit_status with
+  | Unix.WEXITED 0 -> Printf.printf "Program output:\n%s" output
+  | Unix.WEXITED code -> Printf.printf "Program exited with code %d:\n%s" code output
+  | Unix.WSIGNALED signal ->
+    Printf.printf "Program terminated by signal %d:\n%s" signal output
+  | Unix.WSTOPPED signal ->
+    Printf.printf "Program stopped by signal %d:\n%s" signal output
+;;
+
+let compile (module Backend : Codegen.M) (path : string) : string =
   let go () =
     let contents = In_channel.open_text path |> In_channel.input_all in
     let* toplevels =
-      Result.map_error (fun e -> [ `Parser e ]) @@ parse_program contents
+      try Result.map_error (fun e -> [ `Parser e ]) @@ parse_program contents with
+      | Lexer.Lexing_error e -> failwith e
     in
     let desugared = List.map Term.desugar_toplevel toplevels in
     print_endline "Desugared:";

@@ -31,7 +31,7 @@ let get_keyword_or_ident s = Hashtbl.find_opt keywords s |> Option.value ~defaul
 
 let is_op_char = function
   | '+' | '-' | '*' | '/' | '<' | '>' | '!' | '&' | '|' 
-  | '^' | '%' | '~' | '?' | '=' | ':' | '@' | '$' -> true
+  | '^' | '%' | '~' | '?' | '=' | ':' | '@' | '$' | '.' -> true
   | _ -> false
 
 }

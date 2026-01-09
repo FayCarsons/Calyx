@@ -1,8 +1,9 @@
-def prn (x : Int) -> Unit do 
-  print x
+def fib (n : Int) -> Int do 
+  if n < 2 then 
+    n
+  else
+    fib (n - 1) + fib (n - 2)
+  end 
 
-def inc (x : Int) -> Int do 
-  x + 1
-
-def main -> Unit do 
-  prn (inc 0)
+def main -> Unit do
+  print (fib 32)

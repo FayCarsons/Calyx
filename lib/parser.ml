@@ -15,7 +15,6 @@ open Angstrom.Let_syntax
 open Term
 
 let pure = return
-let ( $ ) = Util.( $ )
 
 module Prec = struct
   type t = int Ident.Map.t
@@ -31,7 +30,7 @@ module Prec = struct
   let add : t -> Ident.t -> int -> unit = Ident.Map.add
 
   let lookup : t -> Ident.t -> int =
-    fun m ident -> Option.value ~default:default_precedence $ Ident.Map.find_opt m ident
+    fun m ident -> Option.value ~default:default_precedence @@ Ident.Map.find_opt m ident
   ;;
 end
 
@@ -73,7 +72,8 @@ let is_ident_char c =
 
 let is_ident_legal c = is_upper c || is_lower c || is_digit c || List.mem c [ '_'; '-' ]
 let lexeme p = option () ws *> p <* option () ws
-let symbol s = string s <* option () ws
+let keyword s = lexeme (string s)
+let symbol c = lexeme (char c)
 
 let keywords =
   [ "def"
@@ -95,14 +95,14 @@ let keywords =
   ]
 ;;
 
-let parens p = symbol "(" *> p <* symbol ")"
-let braces p = char '{' *> p <* char '}'
-let brackets p = char '[' *> p <* char ']'
+let parens p = symbol '(' *> p <* symbol ')'
+let braces p = symbol '{' *> p <* symbol '}'
+let brackets p = symbol '[' *> p <* symbol ']'
 let mkvar s : Term.cst = `Var (Ident.mk s)
-let add = symbol "+"
-let sub = symbol "-"
-let mul = symbol "*"
-let div = symbol "/"
+let add = symbol '+'
+let sub = symbol '-'
+let mul = symbol '*'
+let div = symbol '/'
 
 (* Operator character classification *)
 let is_op_char = function
@@ -110,28 +110,23 @@ let is_op_char = function
   | _ -> false
 ;;
 
-(* Parse infix operators *)
-let infix_op = lexeme $ choice [ add; sub; mul; div; take_while1 is_op_char ]
-
 (* Check if string starts with an operator character *)
 let looks_like_operator s = (not (Int.equal (String.length s) 0)) && is_op_char s.[0]
 
 let var_ident =
   lexeme
-  @@
-  let* first = satisfy is_lower in
-  let* rest = take_while is_ident_char in
-  let name = String.make 1 first ^ rest in
-  if List.mem name keywords then fail ("reserved keyword: " ^ name) else pure name
+    (let* first = satisfy is_lower in
+     let* rest = take_while is_ident_char in
+     let name = String.make 1 first ^ rest in
+     if List.mem name keywords then fail ("reserved keyword: " ^ name) else pure name)
 ;;
 
 let ctor_ident =
   lexeme
-  @@
-  let* first = satisfy is_upper in
-  let* rest = take_while is_ident_char in
-  let name = String.make 1 first ^ rest in
-  if List.mem name keywords then fail ("reserved keyword: " ^ name) else pure name
+    (let* first = satisfy is_upper in
+     let* rest = take_while is_ident_char in
+     let name = String.make 1 first ^ rest in
+     if List.mem name keywords then fail ("reserved keyword: " ^ name) else pure name)
 ;;
 
 let any_ident = var_ident <|> ctor_ident
@@ -140,7 +135,7 @@ let any_ident = var_ident <|> ctor_ident
 
 let float_lit : Term.cst t =
   let digits = take_while1 is_digit in
-  let sign = option "" $ string "-" in
+  let sign = option "" @@ string "-" in
   let mantissa =
     let with_non_frac =
       let* i = digits in
@@ -151,7 +146,7 @@ let float_lit : Term.cst t =
     let only_frac =
       let* _ = char '.' in
       let* f = digits in
-      pure $ "0" ^ "." ^ f
+      pure @@ "0" ^ "." ^ f
     in
     choice [ with_non_frac; only_frac ]
   in
@@ -167,7 +162,7 @@ let float_lit : Term.cst t =
   let* m = mantissa in
   let* e = exponent in
   let x = Float.of_string (s ^ m ^ e) in
-  pure $ `Lit (Float x)
+  pure @@ `Lit (Float x)
 ;;
 
 let int_lit : Term.cst t =
@@ -178,8 +173,8 @@ let int_lit : Term.cst t =
 ;;
 
 let bool_lit : Term.cst t =
-  let* b = symbol "True" *> pure true <|> symbol "False" *> pure false in
-  pure $ `Lit (Bool b)
+  let* b = keyword "True" *> pure true <|> keyword "False" *> pure false in
+  pure @@ `Lit (Bool b)
 ;;
 
 let record_lit (expr : Term.cst t) : Term.cst t =
@@ -188,30 +183,47 @@ let record_lit (expr : Term.cst t) : Term.cst t =
       A record field name could be uppercased, in the case of 
       implicit modules where you may have something like 
         `module type Add a where 
-          Output : Type; 
-          (+) : a -> a -> Output;`
+          Output : Type, 
+          (+) : a -> a -> Output`
       which gets desugared to
         `struct Add (a : Type) where 
-          Output : Type; 
-          (+) : a -> a -> Add.Output;`
+          Output : Type,
+          (+) : a -> a -> Add.Output`
       Or just because the user feels like it!
     *)
-    let* ident = var_ident <|> ctor_ident in
-    let* _ = char '=' in
+    let* ident = any_ident in
+    let* _ = symbol ':' in
     let* value = expr in
     pure (ident, value)
   in
   let mk fields = `Lit (Record fields) in
-  mk <$> braces (sep_by1 (char ',') entry)
+  mk <$> braces (sep_by1 (symbol ',') entry)
 ;;
 
 let expr : Term.cst t =
-  let prec_map = Prec.from_list [] in
+  let prec_map =
+    Prec.from_list
+      [ Ident.mk "||", 1
+      ; Ident.mk "&&", 2
+      ; Ident.mk "==", 3
+      ; Ident.mk "!=", 3
+      ; Ident.mk "<", 4
+      ; Ident.mk "<=", 4
+      ; Ident.mk ">", 4
+      ; Ident.mk ">=", 4
+      ; Ident.mk "+", 5
+      ; Ident.mk "-", 5
+      ; Ident.mk "*", 6
+      ; Ident.mk "/", 6
+      ; Ident.mk "%", 6
+      ; Ident.mk "^", 7
+      ]
+  in
   fix (fun expr ->
     let atom =
       lexeme
       @@ choice
-           [ char '(' *> ws *> expr <* ws <* char ')'
+           [ parens (lexeme expr)
            ; mkvar <$> var_ident
            ; mkvar <$> ctor_ident
            ; bool_lit
@@ -226,7 +238,7 @@ let expr : Term.cst t =
       let* tail = many atom in
       pure @@ List.fold_left (fun f x -> `App (f, x)) head tail
     in
-    (* Infix: 1 + x *)
+    (* Infix: 1 + x * 42 *)
     let infix_expr =
       let rec go min_prec left =
         let* c = peek_char in
@@ -234,7 +246,7 @@ let expr : Term.cst t =
         | Some c when is_op_char c ->
           (* Wrap in a fallible parser so we backtrack if op is reserved or wrong precedence *)
           let try_op =
-            let* op = infix_op in
+            let* op = lexeme @@ take_while1 is_op_char in
             let prec = Prec.lookup prec_map (Ident.mk op) in
             if prec < min_prec
             then fail "precedence too low"
@@ -250,57 +262,54 @@ let expr : Term.cst t =
     (* Pi: (x : A) -> B *)
     let pi =
       let* ident, dom =
-        (char '('
-         *> ws
-         *>
-         let* id = var_ident in
-         let* _ = ws *> char ':' *> ws in
-         let* ty = expr in
-         pure (id, ty))
-        <* ws
-        <* char ')'
-        <* ws
+        parens
+          (lexeme
+             (let* id = var_ident in
+              let* _ = symbol ':' in
+              let* ty = expr in
+              pure (id, ty)))
       in
-      let* _ = symbol "->" in
+      let* _ = keyword "->" in
       let* cod = expr in
       pure @@ `Pi (ident, dom, cod)
     in
     (* Arrow: A -> B *)
     let arrow_or_operand =
       let* left = infix_expr in
-      let* arrow_opt = option None (symbol "->" *> expr >>| Option.some) in
+      let* _ = keyword "->" in
+      let* arrow_opt = option None (expr >>| Option.some) in
       match arrow_opt with
       | Some right -> pure @@ `Pi ("_", left, right)
       | None -> pure left
     in
     (* Lam: \x -> x *)
     let lam =
-      let* _ = char '\\' in
-      let* x = ws *> var_ident in
-      let* _ = ws *> string "->" *> ws in
+      let* _ = symbol '\\' in
+      let* x = var_ident in
+      let* _ = keyword "->" in
       let* body = expr in
       pure @@ `Lam (x, body)
     in
     (* Let: let x : t = v in b *)
     let let_expr =
-      let* _ = symbol "let" in
+      let* _ = keyword "let" in
       let* x = var_ident in
-      let* ty = option None (symbol ":" *> expr >>| Option.some) in
-      let* _ = symbol "=" in
+      let* ty = option None (symbol ':' *> expr >>| Option.some) in
+      let* _ = symbol '=' in
       let* bound = expr in
-      let* _ = symbol "in" in
+      let* _ = keyword "in" in
       let* body = expr in
       pure @@ `Let (x, ty, bound, body)
     in
     (* If: if x then t else f *)
     let if_ =
-      let* _ = symbol "if" in
+      let* _ = keyword "if" in
       let* cond = expr in
-      let* _ = symbol "then" in
+      let* _ = keyword "then" in
       let* then_ = expr in
-      let* _ = symbol "else" in
+      let* _ = keyword "else" in
       let* else_ = expr in
-      let* _ = symbol "end" in
+      let* _ = keyword "end" in
       pure @@ `If (cond, then_, else_)
     in
     choice [ lam; let_expr; if_; pi; arrow_or_operand ])
@@ -310,17 +319,17 @@ let toplevel =
   let arg =
     parens
       (let* idents = many1 any_ident in
-       let* _ = symbol ":" in
+       let* _ = symbol ':' in
        let* ty = expr in
-       pure $ List.map (fun i -> i, ty) idents)
+       pure @@ List.map (fun i -> i, ty) idents)
   in
   let fn_decl =
-    let* _ = symbol "def" in
+    let* _ = keyword "def" in
     let* ident = any_ident in
     let* args = many arg in
-    let* _ = symbol "->" in
+    let* _ = keyword "->" in
     let* return_type = expr in
-    let* _ = symbol "do" in
+    let* _ = keyword "do" in
     let* body = expr in
     let typ =
       List.fold_right
@@ -331,29 +340,29 @@ let toplevel =
     let body =
       List.fold_right (fun (x, _) acc -> `Lam (x, acc)) (List.flatten args) body
     in
-    pure $ Term.Function { ident; typ; body }
+    pure @@ Term.Function { ident; typ; body }
   in
   let constant_decl =
-    let* _ = symbol "const" in
+    let* _ = keyword "const" in
     let* ident = any_ident in
-    let* _ = symbol ":" in
+    let* _ = symbol ':' in
     let* typ = expr in
-    let* _ = symbol "=" in
+    let* _ = symbol '=' in
     let* body = expr in
-    pure $ Term.Constant { ident; typ; body }
+    pure @@ Term.Constant { ident; typ; body }
   in
   let record_decl =
     let field =
       let* ident = any_ident in
-      let* _ = symbol ":" in
+      let* _ = symbol ':' in
       let* typ = expr in
       pure (ident, typ)
     in
-    let* _ = symbol "data" in
+    let* _ = keyword "data" in
     let* ident = ctor_ident in
-    let* _ = symbol "where" in
-    let* fields = sep_by1 (symbol ",") field in
-    pure $ Term.RecordDecl { ident; params = []; fields }
+    let* _ = keyword "where" in
+    let* fields = sep_by1 (symbol ',') field in
+    pure @@ Term.RecordDecl { ident; params = []; fields }
   in
   fn_decl <|> constant_decl <|> record_decl
 ;;

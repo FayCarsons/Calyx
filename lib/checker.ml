@@ -209,7 +209,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
      | `Ann (`App (`App (op', left'), right'), result_ty) ->
        let infix_expr = `Infix { left = left'; op = op'; right = right' } in
        Ok (ty, `Ann (infix_expr, result_ty))
-     | _ -> 
+     | _ ->
        (* This shouldn't happen, but if it does, try to preserve structure *)
        let* _, left' = infer left in
        let* _, op' = infer op in

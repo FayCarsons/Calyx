@@ -19,8 +19,15 @@ let backend_of_string = function
 let compile backend path =
   let (module Backend : Codegen.M) = impl_of_backend backend in
   let compiler_output = Runner.compile (module Backend) path in
-  Runner.output_to_file ~extension:Backend.extension ~compiler_output;
-  Option.iter Backend.run_program ~f:(fun cmd -> Runner.run_program (module Backend) cmd)
+  match compiler_output with
+  | Ok compiler_output ->
+    Runner.output_to_file ~extension:Backend.extension ~compiler_output;
+    Option.iter Backend.run_program ~f:(fun cmd ->
+      Runner.run_program (module Backend) cmd)
+  | Error es ->
+    Printf.printf
+      "Failed to compile:\n%s"
+      (String.concat ~sep:"\n" @@ List.map ~f:Pretty.error es)
 ;;
 
 let path =

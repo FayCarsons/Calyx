@@ -28,7 +28,7 @@ let parse_program (input : string) : (Term.cst Term.declaration list, string) re
       let pos = lexbuf.Lexing.lex_curr_p in
       Error
         (Printf.sprintf
-           "Parse error at line %d, column %d"
+           "Parse error at line %d, column %d\n"
            pos.pos_lnum
            (pos.pos_cnum - pos.pos_bol))
   in
@@ -64,36 +64,28 @@ let run_program (module Backend : Codegen.M) (cmd : string) =
     Printf.printf "Program stopped by signal %d:\n%s" signal output
 ;;
 
-let compile (module Backend : Codegen.M) (path : string) : string =
-  let go () =
-    let contents = In_channel.open_text path |> In_channel.input_all in
-    let* toplevels =
-      try Result.map_error (fun e -> [ `Parser e ]) @@ parse_program contents with
-      | Lexer.Lexing_error e -> failwith e
-    in
-    let desugared = List.map Term.desugar_toplevel toplevels in
-    print_endline "Desugared:";
-    List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) desugared;
-    print_newline ();
-    let* inferred, solutions = Checker.infer_toplevel desugared in
-    print_endline "Inferred:";
-    List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) inferred;
-    print_newline ();
-    let zonked = List.map (Zonk.zonk_toplevel solutions) inferred in
-    print_endline "Zonked:";
-    List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) zonked;
-    print_newline ();
-    let ir = Ir.convert zonked in
-    print_endline "IR:";
-    List.iter (Fun.compose print_string Ir.PrettyIR.declaration) ir;
-    print_newline ();
-    Ok ir
+let compile (module Backend : Codegen.M) (path : string) : (string, Error.t list) result =
+  Env.init (Env.from_bindings Backend.standard_library);
+  let contents = In_channel.open_text path |> In_channel.input_all in
+  let* toplevels =
+    try Result.map_error (fun e -> [ `Parser e ]) @@ parse_program contents with
+    | Lexer.Lexing_error e -> failwith e
   in
-  let finally xs =
-    match xs with
-    | Ok zonked -> Backend.compile zonked
-    | Error es -> "Failed to compile:\n" ^ (List.map Pretty.error es |> String.concat "\n")
-  in
-  Env.handle ~env:(Env.from_bindings Backend.standard_library) (fun () ->
-    finally @@ go ())
+  let desugared = List.map Term.desugar_toplevel toplevels in
+  print_endline "Desugared:";
+  List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) desugared;
+  print_newline ();
+  let* inferred, solutions = Checker.infer_toplevel desugared in
+  print_endline "Inferred:";
+  List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) inferred;
+  print_newline ();
+  let zonked = List.map (Zonk.zonk_toplevel solutions) inferred in
+  print_endline "Zonked:";
+  List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) zonked;
+  print_newline ();
+  let ir = Ir.convert zonked in
+  print_endline "IR:";
+  List.iter (Fun.compose print_string Ir.PrettyIR.declaration) ir;
+  print_newline ();
+  Result.ok @@ Backend.compile ir
 ;;

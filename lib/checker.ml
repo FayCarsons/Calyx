@@ -18,24 +18,22 @@ let rec eval : Term.ast -> Term.value = function
   | `Ann (e, _) -> eval e
   | `Type -> `Type
   | `Pi (x, dom, cod) ->
-    let cod = fun v -> Env.local_untyped x ~value:v @@ fun () -> eval cod in
+    let cod = fun v -> Env.with_binding x ~value:v (fun () -> eval cod) in
     `Pi (x, eval dom, cod)
   | `Lam (x, body) ->
-    let body = fun v -> Env.local_untyped x ~value:v @@ fun () -> eval body in
+    let body = fun v -> Env.with_binding x ~value:v (fun () -> eval body) in
     `Lam (x, body)
   | `App (f, x) -> app (eval f) (eval x)
   | `Proj (term, field) -> proj field (eval term)
   | `Let (ident, Some ty, value, body) ->
-    let ty = eval ty
+    let typ = eval ty
     and value = eval value in
-    Env.local_typed ident ~value ~ty @@ fun () -> eval body
+    Env.with_binding ident ~value ~typ (fun () -> eval body)
   | `Let (ident, None, value, body) ->
     let value = eval value in
-    Env.local_untyped ident ~value @@ fun () -> eval body
+    Env.with_binding ident ~value (fun () -> eval body)
   | `Match (scrut, arms) -> `Match (eval scrut, List.map (Tuple.bimap pattern eval) arms)
-  | `Pos (pos, exp) ->
-    Env.set_pos pos;
-    eval exp
+  | `Pos (pos, exp) -> Env.local ~f:(Env.with_pos pos) (fun () -> eval exp)
   | `Lit lit -> `Lit (over_literal eval lit)
   | `Meta m -> `Neutral (NMeta m)
   | `Err e -> `Err e
@@ -95,9 +93,6 @@ and quote_neutral (lvl : int) : neutral -> Term.ast = function
   | NProj (term, field) -> `Proj (quote_neutral lvl term, field)
 ;;
 
-(* TODO: Somewhere in here we are creating a Unify constraint for `Type vs `Var "Int" 
-   which is causing erroneous type errors
-*)
 let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
   | `Var i ->
     print_endline "infer.Var";
@@ -107,15 +102,14 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
   | `Pi (x, dom, cod) ->
     print_endline "infer.Pi";
     let* value = Result.map eval $ check dom `Type in
-    let* _ = Env.local_untyped x ~value (fun () -> check cod `Type) in
+    let* _ = Env.with_binding x ~value (fun () -> check cod `Type) in
     Ok (`Type, `Pi (x, dom, cod))
   (* LAM : \x -> x *)
   | `Lam (x, body) ->
     print_endline "infer.Lam";
     let dom = `Neutral (NMeta (Meta.fresh ())) in
-    let cod = `Neutral (NMeta (Meta.fresh ())) in
-    let* _, body = Env.fresh_var x dom $ fun _ -> infer body in
-    let ty = `Pi (x, dom, Fun.const cod) in
+    let* body_ty, body = Env.fresh_var x dom (fun _ -> infer body) in
+    let ty = `Pi (x, dom, Fun.const body_ty) in
     Ok (ty, `Ann (`Lam (x, body), quote 0 ty))
   (* APP : f x *)
   | `App (f, x) ->
@@ -134,20 +128,20 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
     let* x' = check x dom in
     Ok (cod, `Ann (`App (f, x'), quote 0 cod))
   (* LET : let x : t in x *)
-  | `Let (ident, ty, value, body) ->
+  | `Let (ident, typ, value, body) ->
     print_endline "infer.Let";
-    let* ty =
-      match ty with
+    let* typ =
+      match typ with
       | Some t ->
         let* _ = check t `Type in
         Ok (eval t)
       | None -> Ok (`Neutral (NMeta (Meta.fresh ())))
     in
-    let* value' = check value ty in
+    let* value' = check value typ in
     let* body_ty, body =
-      Env.local_typed ident ~value:(eval value') ~ty $ fun () -> infer body
+      Env.with_binding ident ~value:(eval value') ~typ (fun () -> infer body)
     in
-    Ok (body_ty, `Ann (`Let (ident, Some (quote 0 ty), value', body), quote 0 body_ty))
+    Ok (body_ty, `Ann (`Let (ident, Some (quote 0 typ), value', body), quote 0 body_ty))
   (* ANN : (x : T) *)
   | `Ann (e, a) ->
     print_endline "infer.Ann";
@@ -167,8 +161,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
     Ok (field_ty, `Ann (`Proj (e', field), quote 0 field_ty))
   | `Pos (p, term) ->
     print_endline "infer.Pos";
-    Env.set_pos p;
-    infer term
+    Env.local ~f:(Env.with_pos p) (fun () -> infer term)
   | `Match (scrut, arms) ->
     print_endline "infer.Match";
     let* scrut_ty, scrut' = infer scrut in
@@ -248,7 +241,7 @@ and check : Term.ast -> Term.value -> (Term.ast, Error.t) result =
   fun term expected ->
   match term, expected with
   | `Lam (x, body), `Pi (_, dom, cod) ->
-    let* body' = Env.fresh_var x dom $ fun var -> check body (cod var) in
+    let* body' = Env.fresh_var x dom (fun var -> check body (cod var)) in
     Ok (`Lam (x, body'))
   | `Lam (x, body), `Neutral (NMeta _ as m) ->
     let dom = `Neutral (NMeta (Meta.fresh ())) in
@@ -268,13 +261,13 @@ and check : Term.ast -> Term.value -> (Term.ast, Error.t) result =
     let* value = check value vty in
     let value' = eval value in
     let* body =
-      Env.local_typed ident ~value:value' ~ty:vty @@ fun () -> check body expected
+      Env.with_binding ident ~value:value' ~typ:vty (fun () -> check body expected)
     in
     Ok (`Let (ident, Some (quote 0 vty), value, body))
   | `Pos (pos, term), expected ->
-    Env.set_pos pos;
-    let* term = check term expected in
-    Ok (`Pos (pos, term))
+    Env.local ~f:(Env.with_pos pos) (fun () ->
+      let* term = check term expected in
+      Ok (`Pos (pos, term)))
   | `Ann (expression, typ), expected ->
     let* _ = check typ `Type in
     let typ' = eval typ in
@@ -283,6 +276,7 @@ and check : Term.ast -> Term.value -> (Term.ast, Error.t) result =
     Ok (`Ann (x, typ))
   | term, expected ->
     let* inferred, term' = infer term in
+    (* FIXME: Crash happens here *)
     Solve.Constraints.(tell @@ Unify (inferred, expected));
     Ok term'
 
@@ -295,15 +289,11 @@ and row_extract : Ident.t -> (Ident.t * Term.value) list -> (Term.value, Error.t
              (field, List.map (fun (label, field) -> label, Pretty.value field) fields))
 ;;
 
-let singleton x = [ x ]
-
 let infer_toplevel
   :  ast declaration list
   -> (ast declaration list * Term.value Meta.gen, Error.t list) result
   =
   fun program ->
-  let meta_gen = Meta.default () in
-  print_endline "created meta_gen";
   let rec go
     :  Term.ast Term.declaration list
     -> (Term.ast Term.declaration list, Error.t list) result
@@ -316,32 +306,37 @@ let infer_toplevel
         (Pretty.value vty)
         (Pretty.ast body);
       let placeholder = `Neutral (NVar (Env.level (), ident)) in
-      Env.local_typed ident ~value:placeholder ~ty:vty (fun () ->
-        let* body = Result.map_error singleton @@ check body vty in
+      print_endline "ENTERING ENV.LOCAL";
+      Env.with_binding ident ~value:placeholder ~typ:vty (fun () ->
+        let* body = Result.map_error Core.List.singleton @@ check body vty in
         let typ = quote 0 vty in
-        Result.map (List.cons (Function { ident; typ; body })) $ go rest)
+        Result.map (List.cons (Function { ident; typ; body })) @@ go rest)
     | Constant { ident; typ; body } :: rest ->
-      let* ty, value =
-        Result.map_error singleton
-        $
-        let vty = eval typ in
-        let* body_ast = check body vty in
-        Ok (vty, body_ast)
+      let* typ, value =
+        Result.map_error
+          Core.List.singleton
+          (let vty = eval typ in
+           let* body_ast = check body vty in
+           Ok (vty, body_ast))
       in
       let value = eval value in
-      Env.local_typed ident ~ty ~value (fun () ->
-        let typ = quote 0 ty in
-        Result.map (List.cons (Constant { ident; typ; body })) $ go rest)
+      Env.with_binding ident ~typ ~value (fun () ->
+        let typ = quote 0 typ in
+        Result.map (List.cons (Constant { ident; typ; body })) @@ go rest)
     | RecordDecl { ident; fields; _ } :: rest ->
       let fields = List.map (Tuple.second eval) fields in
-      Env.local_typed ident ~value:(`Row { fields; tail = None }) ~ty:`Type
-      @@ fun () -> go rest
+      Env.with_binding
+        ident
+        ~value:(`Row { fields; tail = None })
+        ~typ:`Type
+        (fun () -> go rest)
     | [] -> Ok []
   in
   let result, gen =
+    let meta_gen = Meta.default () in
     Meta.handle meta_gen (fun () ->
       Solve.Solution.handle meta_gen (fun () ->
-        let program, constraints = Solve.Constraints.handle $ fun () -> go program in
+        let program, constraints = Solve.Constraints.handle (fun () -> go program) in
         match program with
         | Ok program ->
           (match Solve.solve constraints with

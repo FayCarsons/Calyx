@@ -14,7 +14,14 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        ocamlPackages = pkgs.ocaml-ng.ocamlPackages_5_3;
+        ocamlPackages = pkgs.ocamlPackages.overrideScope (
+          self: super: {
+            ocaml = (super.ocaml.override { flambdaSupport = true; }).overrideAttrs (old: {
+              # Force different output path to avoid cache collisions
+              pname = "${old.pname}-flambda";
+            });
+          }
+        );
       in
       with pkgs;
       {
@@ -33,21 +40,15 @@
 
             nodejs-slim_latest
 
-            # Parser combinator libraries
-            angstrom
-
-            # Compiler-related libraries
+            # OCaml libs
             menhir
             menhirLib
-            sedlex
             ppx_deriving
             ppx_sexp_conv
+            ppx_sexp_value
             sexplib
             base
             core
-            stdio
-
-            # Command line parsing
             cmdliner
           ];
         };

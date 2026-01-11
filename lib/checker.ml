@@ -18,20 +18,22 @@ let rec eval : Term.ast -> Term.value = function
   | `Ann (e, _) -> eval e
   | `Type -> `Type
   | `Pi (x, dom, cod) ->
-    let cod = fun v -> Env.with_binding x ~value:v (fun () -> eval cod) in
+    let cod = fun v -> Env.local ~f:(Env.with_binding x ~value:v) (fun () -> eval cod) in
     `Pi (x, eval dom, cod)
   | `Lam (x, body) ->
-    let body = fun v -> Env.with_binding x ~value:v (fun () -> eval body) in
+    let body =
+      fun v -> Env.local ~f:(Env.with_binding x ~value:v) (fun () -> eval body)
+    in
     `Lam (x, body)
   | `App (f, x) -> app (eval f) (eval x)
   | `Proj (term, field) -> proj field (eval term)
   | `Let (ident, Some ty, value, body) ->
     let typ = eval ty
     and value = eval value in
-    Env.with_binding ident ~value ~typ (fun () -> eval body)
+    Env.local ~f:(Env.with_binding ident ~value ~typ) (fun () -> eval body)
   | `Let (ident, None, value, body) ->
     let value = eval value in
-    Env.with_binding ident ~value (fun () -> eval body)
+    Env.local ~f:(Env.with_binding ident ~value) (fun () -> eval body)
   | `Match (scrut, arms) -> `Match (eval scrut, List.map (Tuple.bimap pattern eval) arms)
   | `Pos (pos, exp) -> Env.local ~f:(Env.with_pos pos) (fun () -> eval exp)
   | `Lit lit -> `Lit (over_literal eval lit)
@@ -102,7 +104,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
   | `Pi (x, dom, cod) ->
     print_endline "infer.Pi";
     let* value = Result.map eval $ check dom `Type in
-    let* _ = Env.with_binding x ~value (fun () -> check cod `Type) in
+    let* _ = Env.local ~f:(Env.with_binding x ~value) (fun () -> check cod `Type) in
     Ok (`Type, `Pi (x, dom, cod))
   (* LAM : \x -> x *)
   | `Lam (x, body) ->
@@ -139,7 +141,9 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
     in
     let* value' = check value typ in
     let* body_ty, body =
-      Env.with_binding ident ~value:(eval value') ~typ (fun () -> infer body)
+      Env.local
+        ~f:(Env.with_binding ident ~value:(eval value') ~typ)
+        (fun () -> infer body)
     in
     Ok (body_ty, `Ann (`Let (ident, Some (quote 0 typ), value', body), quote 0 body_ty))
   (* ANN : (x : T) *)
@@ -261,7 +265,8 @@ and check : Term.ast -> Term.value -> (Term.ast, Error.t) result =
     let* value = check value vty in
     let value' = eval value in
     let* body =
-      Env.with_binding ident ~value:value' ~typ:vty (fun () -> check body expected)
+      Env.local ~f:(Env.with_binding ident ~value:value' ~typ:vty) (fun () ->
+        check body expected)
     in
     Ok (`Let (ident, Some (quote 0 vty), value, body))
   | `Pos (pos, term), expected ->
@@ -307,7 +312,7 @@ let infer_toplevel
         (Pretty.ast body);
       let placeholder = `Neutral (NVar (Env.level (), ident)) in
       print_endline "ENTERING ENV.LOCAL";
-      Env.with_binding ident ~value:placeholder ~typ:vty (fun () ->
+      Env.local ~f:(Env.with_binding ident ~value:placeholder ~typ:vty) (fun () ->
         let* body = Result.map_error Core.List.singleton @@ check body vty in
         let typ = quote 0 vty in
         Result.map (List.cons (Function { ident; typ; body })) @@ go rest)
@@ -320,15 +325,13 @@ let infer_toplevel
            Ok (vty, body_ast))
       in
       let value = eval value in
-      Env.with_binding ident ~typ ~value (fun () ->
+      Env.local ~f:(Env.with_binding ident ~typ ~value) (fun () ->
         let typ = quote 0 typ in
         Result.map (List.cons (Constant { ident; typ; body })) @@ go rest)
     | RecordDecl { ident; fields; _ } :: rest ->
       let fields = List.map (Tuple.second eval) fields in
-      Env.with_binding
-        ident
-        ~value:(`Row { fields; tail = None })
-        ~typ:`Type
+      Env.local
+        ~f:(Env.with_binding ident ~value:(`Row { fields; tail = None }) ~typ:`Type)
         (fun () -> go rest)
     | [] -> Ok []
   in

@@ -45,7 +45,7 @@ let output_to_file ~extension ~compiler_output : unit =
   Printf.printf "Output written to: %s\n" output_path
 ;;
 
-let run_program (module Backend : Codegen.M) (cmd : string) =
+let execute (module Backend : Codegen.M) (cmd : string) =
   let output_path =
     Filename.concat ".calyx" (Printf.sprintf "out.%s" Backend.extension)
   in

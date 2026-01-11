@@ -7,7 +7,6 @@ depends: [
   "ocaml"
   "dune" {>= "3.19"}
   "menhir"
-  "angstrom"
   "ppx_deriving"
   "ppx_sexp_conv"
   "core"

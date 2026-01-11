@@ -7,5 +7,3 @@
   - Argument types which are identifiers are nominal, always
   - Not quite ideal? 
     - We could differentiate nominal and structural record declarations like 'shape Foo' vs 'data Foo'?
-
-- Refactor `env.ml` to follow classical Reader effect patterns now that we've tracked down the effect scoping bug

@@ -17,7 +17,6 @@
   ocaml
   dune
   menhir
-  angstrom
   ppx_deriving
   ppx_sexp_conv
   core

@@ -57,13 +57,20 @@ let level () =
   env.level
 ;;
 
-let with_binding (ident : Ident.t) ~(value : Term.value) ?(typ : Term.value option) go =
+let level_succ ({ level; _ } as env) = { env with level = succ level }
+
+let with_binding
+      (ident : Ident.t)
+      ~(value : Term.value)
+      ?(typ : Term.value option)
+      ({ bindings; _ } as env)
+  =
   let binding =
     match typ with
     | Some t -> Typed (value, t)
     | None -> Untyped value
   in
-  local ~f:(fun env -> { env with bindings = (ident, binding) :: env.bindings }) go
+  { env with bindings = (ident, binding) :: bindings }
 ;;
 
 let from_bindings bindings =
@@ -74,5 +81,5 @@ let from_bindings bindings =
 let fresh_var name typ f =
   let lvl = level () in
   let value = `Neutral (Term.NVar (lvl, name)) in
-  with_binding name ~value ~typ (fun () -> f value)
+  local ~f:(Fun.compose level_succ (with_binding name ~value ~typ)) (fun () -> f value)
 ;;

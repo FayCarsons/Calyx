@@ -11,9 +11,23 @@ module type M = sig
   val map_types : (Ident.t * Ident.t) list
   val native_infix : Ident.t list
   (** Command we can call to run generated code *)
-  val run_program : string option
+  val execute : string option
   val extension : string
   val compile : Ir.declaration list -> string
+end
+
+module type Render = sig
+  type t
+  type repr
+
+  val int : t -> repr 
+  val uint : t -> repr 
+  val float : t -> repr
+  val bool : t -> repr
+  val app : f:t -> xs:t list -> repr
+  val let_ : Ident.t -> typ:t -> value:t -> body:t -> repr
+  val projection : t -> Ident.t list -> repr
+  val type_rep : t -> repr 
 end
 
 module WGSL : M = struct
@@ -32,7 +46,7 @@ module WGSL : M = struct
     ]
   ;;
 
-  let run_program = None
+  let execute = None
   let extension = "wgsl"
   let map_types = [ "Int", "i32"; "UInt", "u32"; "Float", "f32" ]
   let native_infix = [ "+"; "-"; "*"; "/" ]
@@ -243,7 +257,7 @@ module Javascript : M = struct
     ]
   ;;
 
-  let run_program = Some "node"
+  let execute = Some "node"
   let extension = "js"
   let map_types = []
   let native_infix = [ "+"; "-"; "*"; "/"; "<" ]

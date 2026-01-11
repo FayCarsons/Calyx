@@ -22,8 +22,7 @@ let compile backend path =
   match compiler_output with
   | Ok compiler_output ->
     Runner.output_to_file ~extension:Backend.extension ~compiler_output;
-    Option.iter Backend.run_program ~f:(fun cmd ->
-      Runner.run_program (module Backend) cmd)
+    Option.iter Backend.execute ~f:(Runner.execute (module Backend))
   | Error es ->
     Printf.printf
       "Failed to compile:\n%s"

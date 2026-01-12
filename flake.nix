@@ -46,6 +46,7 @@
             ppx_deriving
             ppx_sexp_conv
             ppx_sexp_value
+            qcheck
             sexplib
             base
             core

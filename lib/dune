@@ -7,7 +7,10 @@
 (library
  (public_name calyx)
  (name calyx)
- (libraries base core menhirLib unix)
+ (libraries base core menhirLib unix qcheck)
+ (foreign_stubs
+  (language c)
+  (names bloom bloom_stubs))
  (preprocess
   (pps ppx_deriving.show ppx_sexp_conv ppx_inline_test ppx_expect))
  (inline_tests))

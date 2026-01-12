@@ -1,11 +1,12 @@
 module M = struct
   type t = (string[@opaque])
 
-  let compare = String.compare
-  let equal = String.equal
-  let hash = String.hash
-  let mk (s : string) : t = s
+  let compare : t -> t -> int = String.compare
+  let equal : t -> t -> bool = String.equal
+  let hash : t -> int = String.hash
+  let mk : string -> t = Fun.id
 end
 
-module Map = Hashtbl.Make (M)
+module Map = Map.Make (M)
+module Table = Hashtbl.Make (M)
 include M

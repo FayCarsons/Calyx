@@ -3,25 +3,33 @@
 #include <caml/fail.h>
 #include <caml/memory.h>
 #include <caml/mlvalues.h>
+#include <string.h>
 
 #include "bloom.h"
+
+// OCaml runtime doesn't have calloc, so we provide a wrapper
+static void *caml_stat_calloc(usize n, usize size) {
+  usize total = n * size;
+  void *p = caml_stat_alloc(total);
+
+  if (p) {
+    memset(p, 0, total);
+  }
+  return p;
+}
 
 #define BloomFilter_val(v) (*((BloomFilter **)Data_custom_val(v)))
 
 static void bloomFinalize(value v) {
   BloomFilter *bf = BloomFilter_val(v);
   if (bf) {
-    BloomFilter_free(bf, STDLIB_ALLOCATOR);
+    BloomFilter_free(bf, OCAML_ALLOCATOR);
   }
 }
 
 static struct custom_operations bloomOps = {
-    .identifier = "fingerpaint.bloom_filter",
+    .identifier = "calyx.bloom_filter",
     .finalize = bloomFinalize,
-    .compare = custom_compare_default,
-    .hash = custom_hash_default,
-    .serialize = custom_serialize_default,
-    .deserialize = custom_deserialize_default,
 };
 
 CAMLprim value caml_bloom_create(value vSize, value vNumHashes) {
@@ -31,7 +39,7 @@ CAMLprim value caml_bloom_create(value vSize, value vNumHashes) {
   usize size = Long_val(vSize);
   usize numHashes = Long_val(vNumHashes);
 
-  BloomFilter *bf = BloomFilter_new(size, numHashes, STDLIB_ALLOCATOR);
+  BloomFilter *bf = BloomFilter_new(size, numHashes, OCAML_ALLOCATOR);
   if (!bf) {
     caml_failwith("BloomFilter_new: allocation failed");
   }

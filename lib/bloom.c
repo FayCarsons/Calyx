@@ -93,7 +93,7 @@ static inline void hashSplit(u64 h, u32 *h1, u32 *h2) {
 
 // BitVec
 
-BitVec *BitVec_new(usize size, Allocator a) {
+BitVec *BitVec_new(usize size, struct Allocator a) {
   if (size == 0) {
     return NULL;
   }
@@ -116,7 +116,7 @@ BitVec *BitVec_new(usize size, Allocator a) {
   return self;
 }
 
-void BitVec_free(BitVec *self, Allocator a) {
+void BitVec_free(BitVec *self, struct Allocator a) {
   if (!self) {
     return;
   }
@@ -144,7 +144,7 @@ void BitVec_clear(BitVec *self, usize index) {
 
 // BloomFilter
 
-BloomFilter *BloomFilter_new(usize size, usize numHashes, Allocator a) {
+BloomFilter *BloomFilter_new(usize size, usize numHashes, struct Allocator a) {
   if (size == 0 || numHashes == 0) {
     return NULL;
   }
@@ -165,7 +165,7 @@ BloomFilter *BloomFilter_new(usize size, usize numHashes, Allocator a) {
   return self;
 }
 
-void BloomFilter_free(BloomFilter *self, Allocator a) {
+void BloomFilter_free(BloomFilter *self, struct Allocator a) {
   if (!self) {
     return;
   }

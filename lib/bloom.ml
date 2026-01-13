@@ -74,26 +74,7 @@ module Int : BloomFilter = struct
   let add : t -> int -> unit = _put
   let member : t -> int -> bool = _test
 
-  let%test "membership N=5" =
-    let ints = [ 1; 2; 3; 42; 100 ] in
-    let filter = create ~size:16 ~numHashes:2 in
-    List.iter (add filter) ints;
-    List.for_all (member filter) ints
-  ;;
-
-  let%test "membership N=100" =
-    let ints = List.init 100 (fun i -> i * 7) in
-    let filter = create ~size:1024 ~numHashes:3 in
-    List.iter (add filter) ints;
-    List.for_all (member filter) ints
-  ;;
-
-  let%test "Int not present" =
-    let filter = create ~size:128 ~numHashes:2 in
-    not @@ member filter 420
-  ;;
-
-  let%test_unit "no false negatives (random ints)" =
+  let%test_unit "Int no false negatives" =
     QCheck.Test.check_exn
     @@ QCheck.Test.make
          ~count:100
@@ -103,5 +84,16 @@ module Int : BloomFilter = struct
             let filter = create ~size:8192 ~numHashes:3 in
             List.iter (add filter) ints;
             List.for_all (member filter) ints)
+  ;;
+
+  let%test_unit "Int not present" =
+    QCheck.Test.check_exn
+    @@ QCheck.Test.make
+         ~count:100
+         ~name:"Ints not inserted are not members"
+         QCheck.(list_of_size (Gen.int_range 16 256) int)
+         (fun ints ->
+            let filter = create ~size:4096 ~numHashes:3 in
+            List.for_all (Fun.compose not (member filter)) ints)
   ;;
 end

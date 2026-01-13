@@ -77,11 +77,17 @@ type declaration =
 module PrettyIR = struct
   (* IR *)
   let rec ir : t -> string = function
-    | Var x -> x
+    | Var x -> Ident.Intern.lookup x
     | Lit lit -> ir_literal lit
-    | App (f, xs) -> Printf.sprintf "%s %s" f (String.concat ", " @@ List.map ir xs)
+    | App (f, xs) ->
+      Printf.sprintf "%s %s" (Ident.Intern.lookup f) (String.concat ", " @@ List.map ir xs)
     | Let (ident, ty, value, body) ->
-      Printf.sprintf "let %s: %s = %s in\n%s" ident (ir_ty ty) (ir value) (ir body)
+      Printf.sprintf
+        "let %s: %s = %s in\n%s"
+        (Ident.Intern.lookup ident)
+        (ir_ty ty)
+        (ir value)
+        (ir body)
     | If (scrut, t, f) ->
       Printf.sprintf "if %s then\n\t%s\nelse\n\t%s" (ir scrut) (ir t) (ir f)
     | Match (scrut, arms) ->
@@ -91,20 +97,23 @@ module PrettyIR = struct
         @@ List.map (Fun.compose fmt_arm (Util.Tuple.bimap ir_pattern ir)) arms
       in
       Printf.sprintf "match %s with\n%s" (ir scrut) arms
-    | Proj (tm, field) -> Printf.sprintf "%s.%s" (ir tm) field
-    | Infix (left, op, right) -> Printf.sprintf "%s %s %s" (ir left) op (ir right)
+    | Proj (tm, field) -> Printf.sprintf "%s.%s" (ir tm) (Ident.Intern.lookup field)
+    | Infix (left, op, right) ->
+      Printf.sprintf "%s %s %s" (ir left) (Ident.Intern.lookup op) (ir right)
 
   and ir_literal : literal -> string = function
     | Int n | UInt n -> string_of_int n
     | Float x -> string_of_float x
     | Bool b -> string_of_bool b
     | Record fields ->
-      List.map (fun (ident, ty) -> Printf.sprintf "%s = %s" ident (ir ty)) fields
+      List.map
+        (fun (ident, ty) -> Printf.sprintf "%s = %s" (Ident.Intern.lookup ident) (ir ty))
+        fields
       |> String.concat ", "
       |> Printf.sprintf "{ %s }"
 
   and ir_ty : ty -> string = function
-    | TVar x -> x
+    | TVar x -> Ident.Intern.lookup x
     | TFunction { args; returns } ->
       Printf.sprintf
         "(%s) -> %s"
@@ -118,24 +127,42 @@ module PrettyIR = struct
   let declaration : declaration -> string = function
     | Function { ident; args; returns; body } ->
       let args =
-        List.map (fun (ident, ty) -> Printf.sprintf "%s: %s" ident (ir_ty ty)) args
+        List.map
+          (fun (ident, ty) ->
+             Printf.sprintf "%s: %s" (Ident.Intern.lookup ident) (ir_ty ty))
+          args
         |> String.concat ", "
       in
       let returns = ir_ty returns in
       let body = ir body in
-      Printf.sprintf "fn %s(%s) -> %s {\n\t%s\n}\n\n" ident args returns body
+      Printf.sprintf
+        "fn %s(%s) -> %s {\n\t%s\n}\n\n"
+        (Ident.Intern.lookup ident)
+        args
+        returns
+        body
     | Constant { ident; ty; value } ->
-      Printf.sprintf "let %s: %s = %s;\n\n" ident (ir_ty ty) (ir value)
+      Printf.sprintf
+        "let %s: %s = %s;\n\n"
+        (Ident.Intern.lookup ident)
+        (ir_ty ty)
+        (ir value)
     | RecordType { ident; params; fields } ->
       let params =
-        List.map (fun (ident, ty) -> Printf.sprintf "(%s : %s)" ident (ir_ty ty)) params
+        List.map
+          (fun (ident, ty) ->
+             Printf.sprintf "(%s : %s)" (Ident.Intern.lookup ident) (ir_ty ty))
+          params
         |> String.concat " "
       in
       let fields =
         String.concat "\n"
-        @@ List.map (fun (ident, ty) -> Printf.sprintf "%s : %s" ident (ir_ty ty)) fields
+        @@ List.map
+             (fun (ident, ty) ->
+                Printf.sprintf "%s : %s" (Ident.Intern.lookup ident) (ir_ty ty))
+             fields
       in
-      Printf.sprintf "data %s %s where\n%s\n\n" ident params fields
+      Printf.sprintf "data %s %s where\n%s\n\n" (Ident.Intern.lookup ident) params fields
   ;;
 end
 
@@ -186,8 +213,8 @@ let rec convert_expr : Term.ast -> t = function
     let open Util in
     let arms' =
       Tuple.into
-      <$> List.assoc_opt (Term.PVar "True") arms
-      <*> List.assoc_opt (Term.PVar "False") arms
+      <$> List.assoc_opt (Term.PVar (Ident.Intern.intern "True")) arms
+      <*> List.assoc_opt (Term.PVar (Ident.Intern.intern "False")) arms
     in
     (match arms' with
      | Some (then_, else_) ->
@@ -204,7 +231,7 @@ let rec convert_expr : Term.ast -> t = function
     convert_expr x
   | `Lam (x, body) ->
     print_endline "Illegal lone lambda!";
-    Printf.printf "Lam (%s, %s)" x (Pretty.ast body);
+    Printf.printf "Lam (%s, %s)" (Ident.Intern.lookup x) (Pretty.ast body);
     failwith "Fatal!"
   | `Let (ident, Some ty, value, body) ->
     print_endline "IR.convert_expr.Ann";
@@ -238,7 +265,7 @@ and convert_type : Term.ast -> ty = function
     TApp (convert_type f, [ convert_type x ])
   | `Meta _ -> Skolem
   | `Ann (x, _) -> convert_type x
-  | `Type -> TVar "Type" (* Kind of types *)
+  | `Type -> TVar (Ident.Intern.intern "Type") (* Kind of types *)
   | other ->
     failwith
     @@ Printf.sprintf
@@ -262,7 +289,7 @@ and collect_lambda_params acc = function
 
 (* Convert a lambda with its Pi type to a lifted function *)
 and convert_lambda_to_function ?(name_prefix = "fn") pi_type first_param body =
-  let function_name = Fresh.get name_prefix in
+  let function_name = Ident.Intern.intern @@ Fresh.get name_prefix in
   let param_types = extract_pi_types pi_type in
   let return_type = List.nth param_types (List.length param_types - 1) in
   let arg_types = List.rev (List.tl (List.rev param_types)) in

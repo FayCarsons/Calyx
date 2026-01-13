@@ -1,5 +1,6 @@
 open Util
 open Term
+module Intern = Ident.Intern
 
 let over_literal (f : 'a -> 'b) : 'a Term.literal -> 'b Term.literal = function
   | Int n -> Int n
@@ -14,7 +15,7 @@ let rec eval : Term.ast -> Term.value = function
     (match Env.lookup_value name with
      | Some `Opaque -> `Neutral (NVar (Env.level (), name))
      | Some other -> other
-     | None -> failwith @@ Printf.sprintf "No variable '%s' in scope" name)
+     | None -> failwith @@ Printf.sprintf "No variable '%s' in scope" (Intern.lookup name))
   | `Ann (e, _) -> eval e
   | `Type -> `Type
   | `Pi (x, dom, cod) ->
@@ -119,11 +120,11 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
     let* tf, f = infer f in
     let* dom, cod =
       match Solve.force tf with
-      | `Pi (_, dom, cod) -> Ok (dom, cod (`Neutral (NVar (0, "_"))))
+      | `Pi (_, dom, cod) -> Ok (dom, cod (`Neutral (NVar (0, Intern.underscore))))
       | `Neutral (NMeta _) ->
         let dom = `Neutral (NMeta (Meta.fresh ())) in
         let cod = `Neutral (NMeta (Meta.fresh ())) in
-        Solve.Constraints.(tell $ Unify (tf, `Pi ("_", dom, Fun.const cod)));
+        Solve.Constraints.(tell $ Unify (tf, `Pi (Intern.underscore, dom, Fun.const cod)));
         Ok (dom, cod)
       | otherwise -> Error (`Expected ("function", Pretty.value otherwise))
     in
@@ -216,10 +217,10 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
 and infer_lit
   : Term.ast Term.literal -> (Term.value * Term.ast Term.literal, Error.t) result
   = function
-  | Int n -> Ok (`Var "Int", Int n)
-  | UInt n -> Ok (`Var "UInt", UInt n)
-  | Float x -> Ok (`Var "Float", Float x)
-  | Bool b -> Ok (`Var "Bool", Bool b)
+  | Int n -> Ok (`Var (Intern.intern "Int"), Int n)
+  | UInt n -> Ok (`Var (Intern.intern "UInt"), UInt n)
+  | Float x -> Ok (`Var (Intern.intern "Float"), Float x)
+  | Bool b -> Ok (`Var (Intern.intern "Bool"), Bool b)
   | Record structure ->
     (* TODO: We should attempt to find the type name here and return an 
       `Ann (record, type_name). We cannot do this without refactoring the 
@@ -307,7 +308,7 @@ let infer_toplevel
       let vty = eval typ in
       Printf.printf
         "infer_toplevel.Function { ident = %s; typ = %s; body = %s }\n"
-        ident
+        (Intern.lookup ident)
         (Pretty.value vty)
         (Pretty.ast body);
       let placeholder = `Neutral (NVar (Env.level (), ident)) in

@@ -1,4 +1,5 @@
 open Util
+module Intern = Ident.Intern
 
 module type StandardLibrary = sig
   type stage
@@ -7,8 +8,8 @@ module type StandardLibrary = sig
 end
 
 module type M = sig
-  val standard_library : (Ident.t * Env.entry) list
-  val map_types : (Ident.t * Ident.t) list
+  val standard_library : Env.entry Ident.Map.t
+  val map_types : Ident.t Ident.Map.t
   val native_infix : Ident.t list
   (** Command we can call to run generated code *)
   val execute : string option
@@ -31,47 +32,49 @@ module type Render = sig
 end
 
 module WGSL : M = struct
+  let name = Intern.lookup
+
   let standard_library =
-    [ "Int", Env.Typed (`Opaque, `Type)
-    ; ( "+"
+    Ident.Map.of_list  [ Intern.intern "Int", Env.Typed (`Opaque, `Type)
+    ; ( Intern.intern "+"
       , Env.Typed
-          ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "+", x), y)))
+          ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern  "y", fun y -> `App (`App (`Var (Intern.intern "+"), x), y)))
           , `Pi
-              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Int"))))
+              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
           ) )
-    ; ( "succ"
+    ; ( Intern.intern "succ"
       , Env.Typed
-          ( `Lam ("x", fun x -> `App (`App (`Var "+", x), `Lit (Int 1)))
-          , `Pi ("_", `Var "Int", fun _ -> `Var "Int") ) )
+          ( `Lam (Intern.intern "x", fun x -> `App (`App (`Var (Intern.intern "+"), x), `Lit (Int 1)))
+          , `Pi (Intern.underscore, `Var (Intern.intern "Int"), fun _ -> `Var (Intern.intern "Int")) ) )
     ]
   ;;
 
   let execute = None
   let extension = "wgsl"
-  let map_types = [ "Int", "i32"; "UInt", "u32"; "Float", "f32" ]
-  let native_infix = [ "+"; "-"; "*"; "/" ]
-  let var = Fun.id
+  let map_types = Ident.Map.of_list @@ List.map (Tuple.both Intern.intern) [ "Int", "i32"; "UInt", "u32"; "Float", "f32" ]
+  let native_infix : Ident.t list = List.map Intern.intern [ "+"; "-"; "*"; "/" ]
+  let var = name
   let int = string_of_int
   let uint n = string_of_int n ^ "u"
   let float = string_of_float
   let bool = string_of_bool
-  let app f x = Printf.sprintf "%s(%s)" f x
+  let app f x = Printf.sprintf "%s(%s)" (name f) x
 
-  let let_ ident ty value body =
-    Printf.sprintf "let %s : %s = %s;\n%s" ident ty value body
+  let let_ id ty value body =
+    Printf.sprintf "let %s : %s = %s;\n%s" (name id) ty value body
   ;;
 
   let record_literal type_name fields =
     Printf.sprintf "%s(%s)" type_name (String.concat "," $ List.map snd fields)
   ;;
 
-  let proj term field = Printf.sprintf "%s.%s" term field
+  let proj term field = Printf.sprintf "%s.%s" term (name field)
   let emit = String.concat "\n"
 
   let fix_typenames : string -> string =
     let rec go ty =
-      match List.assoc_opt ty map_types with
-      | Some ty -> go ty
+      match Ident.Map.find_opt (Intern.intern ty) map_types with
+      | Some ty_ident -> go (Intern.lookup ty_ident)
       | None -> ty
     in
     go
@@ -79,11 +82,14 @@ module WGSL : M = struct
 
   (* Compile a type to WGSL type syntax *)
   let rec compile_type : Ir.ty -> string = function
-    | TVar "Int" -> "i32"
-    | TVar "UInt" -> "u32"
-    | TVar "Float" -> "f32"
-    | TVar "Bool" -> "bool"
-    | TVar name -> fix_typenames name (* Custom types *)
+    | TVar ident ->
+      let name = Intern.lookup ident in
+      (match name with
+       | "Int" -> "i32"
+       | "UInt" -> "u32"
+       | "Float" -> "f32"
+       | "Bool" -> "bool"
+       | _ -> fix_typenames name)
     | Skolem -> Ir.Fresh.get "A"
     | TFunction { returns; _ } -> compile_type returns
     | TApp (t, xs) ->
@@ -120,17 +126,17 @@ module WGSL : M = struct
          let wgsl_ty = compile_type ty in
          let compiled_value = compile_expr value in
          let compiled_body = add_return_to_final_expr body in
-         Printf.sprintf "let %s : %s = %s;\n%s" ident wgsl_ty compiled_value compiled_body)
+         Printf.sprintf "let %s : %s = %s;\n%s" (name ident) wgsl_ty compiled_value compiled_body)
     | other -> Printf.sprintf "return %s;" (compile_expr other)
 
   (* Compile an expression to WGSL *)
   and compile_expr : Ir.t -> string = function
-    | Var name -> var name
+    | Var n -> var n
     | App (f, x) -> app f (String.concat ", " @@ List.map compile_expr x)
     | Infix (left, op, right) ->
       let left_expr = compile_expr left in
       let right_expr = compile_expr right in
-      Printf.sprintf "(%s %s %s)" left_expr op right_expr
+      Printf.sprintf "(%s %s %s)" left_expr (name op) right_expr
     | Let (ident, ty_opt, value, body) ->
       (match ty_opt with
        | TFunction _ ->
@@ -171,7 +177,7 @@ module WGSL : M = struct
     | Lit (Record fields) ->
       (* Assume it's a struct - we'd need more context to know the type name *)
       let compiled_fields =
-        List.map (fun (name, expr) -> name, compile_expr expr) fields
+        List.map (fun (field_name, expr) -> name field_name, compile_expr expr) fields
       in
       record_literal "UnknownStruct" compiled_fields
   ;;
@@ -179,24 +185,24 @@ module WGSL : M = struct
   (* Compile a top-level declaration *)
   let compile_declaration : Ir.declaration -> string = function
     | Function { ident; args; returns; body } ->
-      let annotation (x, t) = Printf.sprintf "%s: %s" x t in
-      let args =
+      let annotation (x, t) = Printf.sprintf "%s: %s" (name x) t in
+      let args_str =
         String.concat ", "
         @@ List.map (Fun.compose annotation (Tuple.second compile_type)) args
       in
       let returns = compile_type returns in
       let body = add_return_to_final_expr body in
-      Printf.sprintf "fn %s(%s) -> %s {\n  %s\n}" ident args returns body
+      Printf.sprintf "fn %s(%s) -> %s {\n  %s\n}" (name ident) args_str returns body
     | Constant { ident; ty; value } ->
-      Printf.sprintf "const %s: %s = %s;\n" ident (compile_type ty) (compile_expr value)
+      Printf.sprintf "const %s: %s = %s;\n" (name ident) (compile_type ty) (compile_expr value)
     | RecordType { ident; params = _; fields } ->
-      let fields =
+      let fields_str =
         String.concat ",\n  "
         @@ List.map
-             (fun (field, ty) -> Printf.sprintf "%s: %s" field (compile_type ty))
+             (fun (field, ty) -> Printf.sprintf "%s: %s" (name field) (compile_type ty))
              fields
       in
-      Printf.sprintf "struct %s {\n  %s\n}\n" ident fields
+      Printf.sprintf "struct %s {\n  %s\n}\n" (name ident) fields_str
   ;;
 
   (* Main compilation entry point *)
@@ -206,68 +212,71 @@ module WGSL : M = struct
 end
 
 module Javascript : M = struct
+  let name = Intern.lookup
+
   let standard_library =
-    [ "Int", Env.Typed (`Opaque, `Type)
-    ; "Bool", Env.Typed (`Opaque, `Type)
-    ; "Unit", Env.Typed (`Opaque, `Type)
-    ; ( "+"
+    Ident.Map.of_list
+    [ Intern.intern "Int", Env.Typed (`Opaque, `Type)
+    ; Intern.intern "Bool", Env.Typed (`Opaque, `Type)
+    ; Intern.intern "Unit", Env.Typed (`Opaque, `Type)
+    ; ( Intern.intern "+"
       , Env.Typed
-          ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "+", x), y)))
+          ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern "y", fun y -> `App (`App (`Var (Intern.intern "+"), x), y)))
           , `Pi
-              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Int"))))
+              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
           ) )
-    ; ( "-"
+    ; ( Intern.intern "-"
       , Env.Typed
-          ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "-", x), y)))
+          ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern "y", fun y -> `App (`App (`Var (Intern.intern "-"), x), y)))
           , `Pi
-              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Int"))))
+              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
           ) )
-    ; ( "*"
+    ; ( Intern.intern "*"
       , Env.Typed
-          ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "*", x), y)))
+          ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern "y", fun y -> `App (`App (`Var (Intern.intern "*"), x), y)))
           , `Pi
-              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Int"))))
+              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
           ) )
-    ; ( "/"
+    ; ( Intern.intern "/"
       , Env.Typed
-          ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "/", x), y)))
+          ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern "y", fun y -> `App (`App (`Var (Intern.intern "/"), x), y)))
           , `Pi
-              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Int"))))
+              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
           ) )
-    ; ( "=="
+    ; ( Intern.intern "=="
       , Env.Typed
-          ( `Lam ("x", fun x -> `Lam ("y", fun y -> `App (`App (`Var "==", x), y)))
+          ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern "y", fun y -> `App (`App (`Var (Intern.intern "=="), x), y)))
           , `Pi
-              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Bool"))))
+              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Bool")))))
           ) )
-    ; ( "succ"
+    ; ( Intern.intern "succ"
       , Env.Typed
-          ( `Lam ("x", fun x -> `App (`App (`Var "+", x), `Lit (Int 1)))
-          , `Pi ("_", `Var "Int", fun _ -> `Var "Int") ) )
-    ; ( "<"
+          ( `Lam (Intern.intern "x", fun x -> `App (`App (`Var (Intern.intern "+"), x), `Lit (Int 1)))
+          , `Pi (Intern.underscore, `Var (Intern.intern "Int"), fun _ -> `Var (Intern.intern "Int")) ) )
+    ; ( Intern.intern "<"
       , Env.Typed
-          ( `Lam ("a", fun a -> `Lam ("b", fun b -> `App (`App (`Var "<", a), b)))
+          ( `Lam (Intern.intern "a", fun a -> `Lam (Intern.intern "b", fun b -> `App (`App (`Var (Intern.intern "<"), a), b)))
           , `Pi
-              ("_", `Var "Int", Fun.const (`Pi ("_", `Var "Int", Fun.const (`Var "Bool"))))
+              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Bool")))))
           ) )
-    ; ( "print"
+    ; ( Intern.intern "print"
       , Env.Typed
-          ( `Lam ("a", fun a -> `App (`Var "print", a))
-          , `Pi ("_", `Var "Int", Fun.const (`Var "Unit")) ) )
+          ( `Lam (Intern.intern "a", fun a -> `App (`Var (Intern.intern "print"), a))
+          , `Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Unit"))) ) )
     ]
   ;;
 
   let execute = Some "node"
   let extension = "js"
-  let map_types = []
-  let native_infix = [ "+"; "-"; "*"; "/"; "<" ]
-  let var = Fun.id
+  let map_types = Ident.Map.empty
+  let native_infix = List.map Intern.intern [ "+"; "-"; "*"; "/"; "<" ]
+  let var = name
   let int = string_of_int
   let uint n = string_of_int n ^ "u"
   let float = string_of_float
   let bool = string_of_bool
-  let app f x = Printf.sprintf "%s(%s)" f x
-  let let_ ident value body = Printf.sprintf "const %s = %s;\n%s" ident value body
+  let app f x = Printf.sprintf "%s(%s)" (name f) x
+  let let_ id value body = Printf.sprintf "const %s = %s;\n%s" (name id) value body
   let ternary scrut t f = Printf.sprintf "%s ? %s : %s" scrut t f
   (* We can always use ternaries in JavaScript *)
 
@@ -275,10 +284,10 @@ module Javascript : M = struct
     Printf.sprintf
       "{\n%s\n}"
       (String.concat ",\n  "
-       $ List.map (fun (ident, expr) -> Printf.sprintf "%s: %s" ident expr) fields)
+       $ List.map (fun (id, expr) -> Printf.sprintf "%s: %s" (name id) expr) fields)
   ;;
 
-  let proj term field = Printf.sprintf "%s.%s" term field
+  let proj term field = Printf.sprintf "%s.%s" term (name field)
   let emit = String.concat "\n"
 
   (* Add return to the innermost expression in a function body *)
@@ -288,13 +297,13 @@ module Javascript : M = struct
     | other -> Printf.sprintf "return %s;" (compile_expr other)
 
   and compile_expr : Ir.t -> string = function
-    | Var name -> var name
+    | Var n -> var n
     | App (f, x) -> app f (String.concat ", " @@ List.map compile_expr x)
     | Infix (left, op, right) ->
       let left_expr = compile_expr left in
       let right_expr = compile_expr right in
-      Printf.sprintf "%s %s %s" left_expr op right_expr
-    | Let (ident, _, value, body) -> let_ ident (compile_expr value) (compile_expr body)
+      Printf.sprintf "%s %s %s" left_expr (name op) right_expr
+    | Let (id, _, value, body) -> let_ id (compile_expr value) (compile_expr body)
     | If (scrut, t, f) ->
       let scrut, t, f = compile_expr scrut, compile_expr t, compile_expr f in
       ternary scrut t f
@@ -306,7 +315,7 @@ module Javascript : M = struct
     | Lit (Bool b) -> bool b
     | Lit (Record fields) ->
       let compiled_fields =
-        List.map (fun (name, expr) -> name, compile_expr expr) fields
+        List.map (fun (field_name, expr) -> field_name, compile_expr expr) fields
       in
       record_literal compiled_fields
   ;;
@@ -314,11 +323,11 @@ module Javascript : M = struct
   (* Compile a top-level declaration *)
   let compile_declaration : Ir.declaration -> string = function
     | Function { ident; args; body; _ } ->
-      let args = String.concat ", " @@ List.map fst args in
+      let args_str = String.concat ", " @@ List.map (fun (a, _) -> name a) args in
       let body = add_return_to_final_expr body in
-      Printf.sprintf "const %s = (%s) => {\n  %s\n}" ident args body
+      Printf.sprintf "const %s = (%s) => {\n  %s\n}" (name ident) args_str body
     | Constant { ident; value; _ } ->
-      Printf.sprintf "const %s = %s;\n" ident (compile_expr value)
+      Printf.sprintf "const %s = %s;\n" (name ident) (compile_expr value)
     | RecordType _ -> ""
   ;;
 

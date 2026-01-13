@@ -1,5 +1,6 @@
 {
 open Parser
+module Intern = Ident.Intern
 
 exception Lexing_error of string
 
@@ -27,7 +28,10 @@ let keywords = make_table [
   ("False", BOOL false);
 ]
 
-let get_keyword_or_ident s = Hashtbl.find_opt keywords s |> Option.value ~default:(IDENT s)
+let get_keyword_or_ident s = 
+  match Hashtbl.find_opt keywords s with 
+  | Some tok -> tok 
+  | None -> IDENT (Intern.intern s)
 
 let is_op_char = function
   | '+' | '-' | '*' | '/' | '<' | '>' | '!' | '&' | '|' 
@@ -94,7 +98,7 @@ and operator buf = parse
         match op with
         | ":" -> COLON
         | "=" -> EQUALS
-        | _ -> OPERATOR op
+        | _ -> OPERATOR (Intern.intern op)
       )
     }
   | "" { 
@@ -102,7 +106,7 @@ and operator buf = parse
       match op with
       | ":" -> COLON
       | "=" -> EQUALS
-      | _ -> OPERATOR op
+      | _ -> OPERATOR (Intern.intern op)
     }
 
 and comment = parse

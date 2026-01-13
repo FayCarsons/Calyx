@@ -1,17 +1,17 @@
 %{
 open Term
 
-let make_var (s : string) : Term.cst = `Var (Ident.mk s)
+let make_var (ident : Ident.t) : Term.cst = `Var ident
 let make_infix left op right = 
-  `Infix { left; op = `Var (Ident.mk op); right }
+  `Infix { left; op = `Var op; right }
 %}
 
 /* Tokens */
 %token <int> INT
 %token <float> FLOAT  
 %token <string> STRING
-%token <string> IDENT
-%token <string> OPERATOR
+%token <Ident.t> IDENT
+%token <Ident.t> OPERATOR
 %token <bool> BOOL
 
 /* Keywords */
@@ -41,7 +41,7 @@ let declaration :=
   | data_decl
 
 let def_decl :=
-  | DEF; name = IDENT; params = list(param); 
+  | DEF; ident = IDENT; params = list(param); 
     ret = option(preceded(ARROW, type_expr)); 
     DO; body = expr; option(END); {
       let rec build_lam params body =
@@ -57,22 +57,22 @@ let def_decl :=
       in
       let body_with_params = build_lam params body in
       let typ = build_type params ret in
-      Function { ident = Ident.mk name; typ; body = body_with_params }
+      Function { ident; typ; body = body_with_params }
     }
 
 let let_decl := 
-  | LET; name = IDENT; ty = option(preceded(COLON, type_expr)); 
-    EQUALS; value = expr; {
+  | LET; ident = IDENT; ty = option(preceded(COLON, type_expr)); 
+    EQUALS; body = expr; {
       let typ = Option.value ~default:`Type ty in
-      Constant { ident = Ident.mk name; typ; body = value }
+      Constant { ident; typ; body }
     }
 
 let data_decl :=
-  | DATA; name = IDENT; params = list(type_param); WHERE; 
+  | DATA; ident = IDENT; params = list(type_param); WHERE; 
     fields = list(constructor); option(END); {
-      let params = List.map (fun (x, ty) -> (Ident.mk x, ty)) params in
-      let fields = List.map (fun (n, t) -> (Ident.mk n, t)) fields in
-      RecordDecl { ident = Ident.mk name; params; fields }
+      let params = List.map (fun (x, ty) -> (x, ty)) params in
+      let fields = List.map (fun (n, t) -> (n, t)) fields in
+      RecordDecl { ident; params; fields }
     }
 
 let type_param :=
@@ -92,10 +92,10 @@ let type_expr :=
 let type_arrow :=
   | t = type_atom; { t }
   | t1 = type_atom; ARROW; t2 = type_arrow; { 
-      `Pi (Ident.mk "_", t1, t2) 
+      `Pi (Ident.Intern.underscore, t1, t2) 
     }
   | LPAREN; x = IDENT; COLON; t1 = type_expr; RPAREN; ARROW; t2 = type_arrow; {
-      `Pi (Ident.mk x, t1, t2)
+      `Pi (x, t1, t2)
     }
 
 let type_atom :=
@@ -116,7 +116,7 @@ let expr :=
 let expr_let :=
   | LET; x = IDENT; ty = option(preceded(COLON, type_expr)); 
     EQUALS; v = expr; IN; body = expr; {
-      `Let (Ident.mk x, ty, v, body)
+      `Let (x, ty, v, body)
     }
 
 let expr_if :=
@@ -140,12 +140,12 @@ let pattern :=
 
 let pattern_app :=
   | x = IDENT; ps = nonempty_list(pattern_atom); { 
-      PCtor (Ident.mk x, ps) 
+      PCtor (x, ps) 
     }
   | p = pattern_atom; { p }
 
 let pattern_atom :=
-  | x = IDENT; { PVar (Ident.mk x) }
+  | x = IDENT; { PVar x }
   | i = INT; { PLit (Int i) }
   | b = BOOL; { PLit (Bool b) }
   | LPAREN; p = pattern; RPAREN; { p }
@@ -154,7 +154,7 @@ let expr_lambda :=
   | BACKSLASH; params = nonempty_list(IDENT); ARROW; body = expr; {
       let rec build_lam = function
         | [] -> body
-        | x :: xs -> `Lam (Ident.mk x, build_lam xs)
+        | x :: xs -> `Lam (x, build_lam xs)
       in
       build_lam params
     }
@@ -175,7 +175,7 @@ let expr_app :=
 
 let expr_proj :=
   | e = expr_proj; DOT; field = IDENT; { 
-      `Proj (e, Ident.mk field) 
+      `Proj (e, field) 
     }
   | expr_atom
 
@@ -192,5 +192,5 @@ let record_fields :=
 
 let record_field :=
   | name = IDENT; EQUALS; value = expr; { 
-      (Ident.mk name, value) 
+      (name, value) 
     }

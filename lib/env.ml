@@ -14,14 +14,19 @@ let typ : entry -> Term.value option = function
   | _ -> None
 ;;
 
+module IdentMap = Ident.Map
+
 type t =
-  { bindings : (Ident.t * entry) list
+  { bindings : entry IdentMap.t
   ; pos : Pos.t
   ; level : int
   }
 
 let default () =
-  { bindings = []; pos = { filename = "<TEST>"; line = 0L; col = 0L }; level = 0 }
+  { bindings = IdentMap.empty
+  ; pos = { filename = "<TEST>"; line = 0L; col = 0L }
+  ; level = 0
+  }
 ;;
 
 let env : t ref = ref @@ default ()
@@ -36,7 +41,7 @@ let local ~f thunk =
 
 let lookup ident =
   let env = ask () in
-  List.assoc_opt ident env.bindings
+  IdentMap.find_opt ident env.bindings
 ;;
 
 let lookup_value : Ident.t -> Term.value option = fun ident -> value <$> lookup ident
@@ -70,7 +75,7 @@ let with_binding
     | Some t -> Typed (value, t)
     | None -> Untyped value
   in
-  { env with bindings = (ident, binding) :: bindings }
+  { env with bindings = IdentMap.add ident binding bindings }
 ;;
 
 let from_bindings bindings =

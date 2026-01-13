@@ -105,7 +105,9 @@ let rec desugar : cst -> ast = function
     let cond = desugar cond
     and t = desugar t
     and f = desugar f in
-    `Match (cond, [ PVar "True", t; PVar "False", f ])
+    `Match
+      ( cond
+      , [ PVar (Ident.Intern.intern "True"), t; PVar (Ident.Intern.intern "False"), f ] )
   | #base as b -> (over_base desugar b :> ast)
   | #term_binders as binder -> (over_term_binders desugar binder :> ast)
 ;;

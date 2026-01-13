@@ -16,7 +16,11 @@ module Constraints = struct
     let pretty = function
       | Unify (a, b) -> Printf.sprintf "Unify %s %s" (Pretty.value a) (Pretty.value b)
       | HasField (ident, ty, tm) ->
-        Printf.sprintf "HasField %s %s %s" ident (Pretty.value ty) (Pretty.value tm)
+        Printf.sprintf
+          "HasField %s %s %s"
+          (Ident.Intern.lookup ident)
+          (Pretty.value ty)
+          (Pretty.value tm)
       | HasStage (tm, stage) ->
         Printf.sprintf "HasStage %s %s" (Pretty.value tm)
         @@
@@ -96,10 +100,10 @@ let rec occurs (m : Meta.t) (v : value) : bool =
   | `Neutral (NApp (f, x)) -> occurs_neutral m f || occurs m x
   | `Neutral (NProj (n, _)) -> occurs_neutral m n
   | `Pi (_, dom, cod) ->
-    let var = `Neutral (NVar (0, "_")) in
+    let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     occurs m dom || occurs m (cod var)
   | `Lam (_, body) ->
-    let var = `Neutral (NVar (0, "_")) in
+    let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     occurs m (body var)
   | `Row r -> occurs_row m r
   | `Rec r -> occurs m r
@@ -136,28 +140,30 @@ let rec unify : value -> value -> (unit, Error.t) result =
   and b = force b in
   match a, b with
   | `Var l, `Var r ->
-    if String.equal l r then Ok () else Error (`UnificationFailure (l, r))
+    if Ident.equal l r
+    then Ok ()
+    else Error (`UnificationFailure (Ident.Intern.lookup l, Ident.Intern.lookup r))
   | `Neutral (NMeta m1), `Neutral (NMeta m2) when Meta.equal m1 m2 -> Ok ()
   | `Neutral (NMeta m), v | v, `Neutral (NMeta m) -> solve_meta m v
   | `Type, `Type -> Ok ()
   | `Lam (_, body1), `Lam (_, body2) ->
-    let var = `Neutral (NVar (0, "_")) in
+    let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     Constraints.tell @@ Unify (body1 var, body2 var);
     Ok ()
   | `Lam (_, body), f | f, `Lam (_, body) ->
-    let var = `Neutral (NVar (0, "_")) in
+    let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     let* right = vapp f var in
     Constraints.tell @@ Unify (body var, right);
     Ok ()
   | `Pi (_, dom, cod), `Pi (_, dom', cod') ->
-    let var = `Neutral (NVar (0, "_")) in
+    let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     Constraints.(tell $ Unify (dom, dom'));
     Constraints.(tell $ Unify (cod var, cod' var));
     Ok ()
   | (`Neutral (NVar (_, name)), `Var name' | `Var name, `Neutral (NVar (_, name')))
     when Ident.equal name name' -> Ok ()
   | `Neutral (NVar (l_level, l_name)), `Neutral (NVar (r_level, r_name)) ->
-    if Int.equal l_level r_level && String.equal l_name r_name
+    if Int.equal l_level r_level && Ident.equal l_name r_name
     then Ok ()
     else
       Error
@@ -173,12 +179,12 @@ and unify_neutral : neutral -> neutral -> (unit, Error.t) result =
   fun l r ->
   match l, r with
   | NVar (l_level, l_name), NVar (r_level, r_name)
-    when Int.equal l_level r_level && String.equal l_name r_name -> Ok ()
+    when Int.equal l_level r_level && Ident.equal l_name r_name -> Ok ()
   | NApp (f, x), NApp (f', x') ->
     let* _ = unify_neutral f f' in
     Constraints.tell @@ Unify (x, x');
     Ok ()
-  | NProj (tm, field), NProj (tm', field') when String.equal field field' ->
+  | NProj (tm, field), NProj (tm', field') when Ident.equal field field' ->
     unify_neutral tm tm'
   (* Neutrals mismatch*)
   | l, r -> Error (`UnificationFailure (Pretty.neutral l, Pretty.neutral r))

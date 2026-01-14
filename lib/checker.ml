@@ -101,25 +101,25 @@ and quote_neutral (lvl : int) : neutral -> Term.ast = function
 
 let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = function
   | `Var i ->
-    print_endline "infer.Var";
+    (* print_endline "infer.Var"; *)
     let* ty = Env.lookup_type i |> Result.of_option ~error:(`NotFound i) in
     Ok (ty, `Ann (`Var i, quote 0 ty))
   (* PI : (a : A) -> B *)
   | `Pi (x, dom, cod) ->
-    print_endline "infer.Pi";
+    (* print_endline "infer.Pi"; *)
     let* value = Result.map ~f:eval @@ check dom `Type in
     let* _ = Env.local ~f:(Env.with_binding x ~value) (fun () -> check cod `Type) in
     Ok (`Type, `Pi (x, dom, cod))
   (* LAM : \x -> x *)
   | `Lam (x, body) ->
-    print_endline "infer.Lam";
+    (* print_endline "infer.Lam"; *)
     let dom = `Neutral (NMeta (Meta.fresh ())) in
     let* body_ty, body = Env.fresh_var x dom (fun _ -> infer body) in
     let ty = `Pi (x, dom, Fun.const body_ty) in
     Ok (ty, `Ann (`Lam (x, body), quote 0 ty))
   (* APP : f x *)
   | `App (f, x) ->
-    print_endline "infer.App";
+    (* print_endline "infer.App"; *)
     let* tf, f = infer f in
     let* dom, cod =
       match Solve.force tf with
@@ -136,7 +136,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     Ok (cod, `Ann (`App (f, x'), quote 0 cod))
   (* LET : let x : t in x *)
   | `Let (ident, typ, value, body) ->
-    print_endline "infer.Let";
+    (* print_endline "infer.Let"; *)
     let* typ =
       match typ with
       | Some t ->
@@ -153,26 +153,26 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     Ok (body_ty, `Ann (`Let (ident, Some (quote 0 typ), value', body), quote 0 body_ty))
   (* ANN : (x : T) *)
   | `Ann (e, a) ->
-    print_endline "infer.Ann";
+    (* print_endline "infer.Ann"; *)
     let* _ = check a `Type in
     let vt = eval a in
     let* e = check e vt in
     Ok (vt, `Ann (e, a))
   (* TYPE : Type *)
   | `Type ->
-    print_endline "infer.Type";
+    (* print_endline "infer.Type"; *)
     Ok (`Type, `Type)
   | `Proj (term, field) ->
-    print_endline "infer.Proj";
+    (* print_endline "infer.Proj"; *)
     let* te, e' = infer term in
     let field_ty = `Neutral (NMeta (Meta.fresh ())) in
-    Solve.Constraints.(tell @@ HasField (field, te, field_ty));
+    Solve.Constraints.(tell (te =. (field, field_ty)));
     Ok (field_ty, `Ann (`Proj (e', field), quote 0 field_ty))
   | `Pos (p, term) ->
-    print_endline "infer.Pos";
+    (* print_endline "infer.Pos"; *)
     Env.local ~f:(Env.with_pos p) (fun () -> infer term)
   | `Match (scrut, arms) ->
-    print_endline "infer.Match";
+    (* print_endline "infer.Match"; *)
     let* scrut_ty, scrut' = infer scrut in
     let infer_arm (pattern, body) =
       let* body_ty, body' = infer body in
@@ -192,17 +192,17 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
              (`Match (`Ann (scrut', quote 0 scrut_ty), annotated_arms), quote 0 first_ty)
          ))
   | `Lit lit ->
-    print_endline "infer.Lit";
+    (* print_endline "infer.Lit"; *)
     let* ty, lit' = infer_lit lit in
     Ok (ty, `Ann (`Lit lit', quote 0 ty))
   | `Meta m ->
-    print_endline "infer.Meta";
+    (* print_endline "infer.Meta"; *)
     Ok (`Neutral (NMeta m), `Meta m)
   | `Err e ->
-    print_endline "infer.Err";
+    (* print_endline "infer.Err"; *)
     Ok (`Err e, `Err e)
   | `Infix { left; op; right } ->
-    print_endline "infer.Infix";
+    (* print_endline "infer.Infix"; *)
     (* Convert infix to nested application for type checking *)
     let app_expr = `App (`App (op, left), right) in
     let* ty, checked_app = infer app_expr in
@@ -225,15 +225,7 @@ and infer_lit
   | UInt n -> Ok (`Var (Intern.intern "UInt"), UInt n)
   | Float x -> Ok (`Var (Intern.intern "Float"), Float x)
   | Bool b -> Ok (`Var (Intern.intern "Bool"), Bool b)
-  | Record _structure ->
-    (* TODO: We should attempt to find the type name here and return an 
-      `Ann (record, type_name). We cannot do this without refactoring the 
-      record system in general. Term.value's `Rec and `Row shouldn't exist,
-      we should just have one Record literal and if it's at the type level
-      then that's a row type 100% of the time. If a record is referred to by 
-      name, that's nominal. EzPz
-    *)
-    failwith "TODO"
+  | Record _structure -> failwith "TODO"
 
 and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
   fun term expected ->
@@ -248,7 +240,6 @@ and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
     let* body' = Env.fresh_var x dom (fun _ -> check body cod) in
     Ok (`Lam (x, body'))
   | `Let (ident, ty, value, body), expected ->
-    print_endline "Computing vty";
     let* vty =
       match ty with
       | Some t ->
@@ -300,13 +291,12 @@ let infer_toplevel
     = function
     | Function { ident; typ; body } :: rest ->
       let vty = eval typ in
-      Printf.printf
-        "infer_toplevel.Function { ident = %s; typ = %s; body = %s }\n"
-        (Intern.lookup ident)
-        (Term.show_value vty)
-        (Term.show_ast body);
+      (* Printf.printf *)
+      (*   "infer_toplevel.Function { ident = %s; typ = %s; body = %s }\n" *)
+      (*   (Intern.lookup ident) *)
+      (*   (Term.show_value vty) *)
+      (*   (Term.show_ast body); *)
       let placeholder = `Neutral (NVar (Env.level (), ident)) in
-      print_endline "ENTERING ENV.LOCAL";
       Env.local ~f:(Env.with_binding ident ~value:placeholder ~typ:vty) (fun () ->
         let* body = Result.map_error ~f:Core.List.singleton @@ check body vty in
         let typ = quote 0 vty in
@@ -332,14 +322,12 @@ let infer_toplevel
     Meta.handle meta_gen (fun () ->
       Solve.Solution.handle meta_gen (fun () ->
         let program, constraints = Solve.Constraints.handle (fun () -> go program) in
-        match program with
-        | Ok program ->
-          (match Solve.solve constraints with
-           | Ok () -> Ok program
-           | Error es ->
-             print_endline (Solve.pretty_solver_error es);
-             failwith "Failed to type program")
-        | Error es -> Error es))
+        Result.map program ~f:(fun program ->
+          match Solve.solve constraints with
+          | Ok () -> program
+          | Error es ->
+            print_endline (Solve.pretty_solver_error es);
+            raise (Failure "Failed to type program"))))
   in
   Result.map ~f:(Tuple.intoRev gen) result
 ;;

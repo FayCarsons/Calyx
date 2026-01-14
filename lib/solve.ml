@@ -7,11 +7,19 @@ module Constraints = struct
     type t =
       | Equals of Term.value * Term.value
       | Subtype of Term.value * Term.value
-      | HasField of Ident.t * Term.value * Term.value
+      | HasField of Term.value * Ident.t * Term.value
     [@@deriving show, sexp]
 
     let equals a b = Equals (a, b)
-    let ( := ) = equals
+    let ( %= ) = equals
+    let subtype a b = Subtype (a, b)
+    let ( => ) = subtype
+
+    let has_field ~record ~field_name ~field_type =
+      HasField (record, field_name, field_type)
+    ;;
+
+    let ( =. ) record (field_name, field_type) = has_field ~record ~field_name ~field_type
   end
 
   include Writer.Make (M)
@@ -129,17 +137,17 @@ let rec unify : value -> value -> (unit, CalyxError.t) result =
   | `Type, `Type -> Ok ()
   | `Lam (_, body1), `Lam (_, body2) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
-    Constraints.tell @@ Equals (body1 var, body2 var);
+    Constraints.(tell (body1 var %= body2 var));
     Ok ()
   | `Lam (_, body), f | f, `Lam (_, body) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     let* right = vapp f var in
-    Constraints.tell @@ Equals (body var, right);
+    Constraints.(tell (body var %= right));
     Ok ()
   | `Pi (_, dom, cod), `Pi (_, dom', cod') ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
-    Constraints.(tell @@ Equals (dom, dom'));
-    Constraints.(tell @@ Equals (cod var, cod' var));
+    Constraints.(tell (dom %= dom'));
+    Constraints.(tell (cod var %= cod' var));
     Ok ()
   | (`Neutral (NVar (_, name)), `Var name' | `Var name, `Neutral (NVar (_, name')))
     when Ident.equal name name' -> Ok ()
@@ -163,7 +171,7 @@ and unify_neutral : neutral -> neutral -> (unit, CalyxError.t) result =
     when Int.equal l_level r_level && Ident.equal l_name r_name -> Ok ()
   | NApp (f, x), NApp (f', x') ->
     let* _ = unify_neutral f f' in
-    Constraints.tell @@ Equals (x, x');
+    Constraints.(tell (x %= x'));
     Ok ()
   | NProj (tm, field), NProj (tm', field') when Ident.equal field field' ->
     unify_neutral tm tm'
@@ -186,7 +194,7 @@ and unify_lit l r =
     if List.equal Ident.equal fields_l fields_r
     then (
       List.iter2_exn
-        ~f:(fun (_, v1) (_, v2) -> Constraints.tell @@ Equals (v1, v2))
+        ~f:(fun (_, v1) (_, v2) -> Constraints.(tell (v1 %= v2)))
         sorted_l
         sorted_r;
       Ok ())
@@ -203,7 +211,7 @@ and unify_rows : row -> row -> (unit, CalyxError.t) result =
   Map.iter2
     ~f:(fun ~key:_ ~data ->
       match data with
-      | `Both (v1, v2) -> Constraints.(tell @@ Equals (v1, v2))
+      | `Both (v1, v2) -> Constraints.(tell (v1 %= v2))
       | _ -> ())
     left_fields
     right_fields
@@ -214,12 +222,11 @@ and unify_rows : row -> row -> (unit, CalyxError.t) result =
   let only_right =
     Map.filter_keys ~f:(fun k -> not @@ Map.mem left_fields k) right_fields
   in
-  let tail_meta = `Neutral (NMeta (Meta.fresh ())) in
-  let tail = Some tail_meta in
+  let tail = Option.some @@ `Neutral (NMeta (Meta.fresh ())) in
   Option.iter
     ~f:(fun (l, r) ->
-      Constraints.(tell @@ Equals (l, `Row { fields = only_right; tail }));
-      Constraints.(tell @@ Equals (r, `Row { fields = only_left; tail })))
+      Constraints.(tell (l %= `Row { fields = only_left; tail }));
+      Constraints.(tell (r %= `Row { fields = only_right; tail })))
     (Tuple.into <$> l.tail <*> r.tail);
   Ok ()
 
@@ -237,13 +244,18 @@ type solver_error =
       ; errors : CalyxError.t list
       }
   | Errors of CalyxError.t list
+[@@deriving show, sexp]
 
 let pretty_solver_error = function
-  | Stuck { stuck; errors } ->
+  | Stuck { stuck; errors = _ :: _ as es } ->
     Printf.sprintf
-      "Stuck!\nCould not solve constraints:\n%s\nWith errors:\n%s\n"
+      "Could not solve constraints:\n%s\nWith errors:\n%s\n"
       (String.concat ~sep:", " @@ List.map ~f:Constraints.show stuck)
-      (String.concat ~sep:", " @@ List.map ~f:CalyxError.show errors)
+      (String.concat ~sep:", " @@ List.map ~f:CalyxError.show es)
+  | Stuck { stuck; _ } ->
+    Printf.sprintf
+      "Could not solve constraints:\n%s\n"
+      (String.concat ~sep:", " @@ List.map ~f:Constraints.show stuck)
   | Errors es ->
     Printf.sprintf
       "Failed to solve due to errors:\n%s\n"
@@ -257,7 +269,7 @@ let rec solve (initial : Constraints.t list) : (unit, solver_error) result =
       Constraints.handle (fun () ->
         List.iter
           ~f:(fun c ->
-            print_endline (Printf.sprintf "SOLVING CONSTRAINT: %s" (Constraints.show c));
+            (* print_endline (Printf.sprintf "SOLVING CONSTRAINT: %s" (Constraints.show c)); *)
             progressed := solve_one c)
           initial))
   in
@@ -269,38 +281,39 @@ let rec solve (initial : Constraints.t list) : (unit, solver_error) result =
 
 and solve_one = function
   | Equals (a, b) ->
-    Printf.printf "SOLVING EQUALS '%s' '%s'\n" (Term.show_value a) (Term.show_value b);
+    (* Printf.printf "SOLVING EQUALS '%s' '%s'\n" (Term.show_value a) (Term.show_value b); *)
     (match unify a b with
      | Ok () ->
-       print_endline "SUCCEEDED";
+       (* print_endline "SUCCEEDED"; *)
        true
      | Error e ->
-       print_endline "FAILED";
+       (* print_endline "FAILED"; *)
        CalyxError.tell e;
        true)
-  | Subtype (a, b) ->
-    Printf.printf "SOLVING SUBTYPE '%s' :> '%s'" (Term.show_value a) (Term.show_value b);
+  | Subtype (_a, _b) ->
+    (* Printf.printf "SOLVING SUBTYPE '%s' :> '%s'" (Term.show_value a) (Term.show_value b); *)
     failwith "TODO"
-  | HasField (label, record, field) -> solve_record label record field
+  | HasField (record, field_name, field_type) ->
+    solve_record ~record ~field_name ~field_type
 
-and solve_record : Ident.t -> value -> value -> bool =
-  fun label record field ->
+and solve_record : record:value -> field_name:Ident.t -> field_type:value -> bool =
+  fun ~record ~field_name ~field_type ->
   match force record with
   | `Rec row_val ->
     (match force row_val with
      | `Row r ->
        Option.iter
-         ~f:(fun ty -> Constraints.(tell @@ Equals (field, ty)))
-         (Map.find r.fields label);
+         ~f:(Fun.compose Constraints.tell (Constraints.equals field_type))
+         (Map.find r.fields field_name);
        true
      | `Neutral (NMeta _) ->
-       Constraints.(tell @@ HasField (label, record, field));
+       Constraints.(tell @@ (record =. (field_name, field_type)));
        false
      | _ ->
        CalyxError.tell @@ `Expected ("row", Term.show_value row_val);
        true)
   | `Neutral (NMeta _) ->
-    Constraints.tell @@ HasField (label, record, field);
+    Constraints.(tell @@ (record =. (field_name, field_type)));
     false
   | _ ->
     CalyxError.tell @@ `Expected ("record", Term.show_value record);

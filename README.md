@@ -8,6 +8,7 @@ Calyx is not intended to be a proof assistant. Its type system is motivated by t
 
 Planned features include:
 - Row polymorphic records
+- Implicit modules for ad-hoc polymorphism
 - First-class lenses
 - Algebraic effects
 - Partial evaluation and compile-time reflection in place of macros
@@ -15,7 +16,7 @@ Planned features include:
 
 # Usage
 
-You can get a taste of the syntax in [example.calyx](example.calyx) (more examples to come), simply call
+You can get an idea of the syntax in [example.calyx](example.calyx) (more examples to come), simply call
 ```bash
 dune exec calyx -- my_calyx_file.calyx
 ```

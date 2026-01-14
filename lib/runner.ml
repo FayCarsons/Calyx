@@ -66,7 +66,10 @@ let execute (module Backend : Codegen.M) (cmd : string) =
 
 let print_ast_sexp =
   let ( >> ) = Fun.compose in
-  print_endline >> Sexplib.Sexp.to_string_hum >> Term.sexp_of_declaration Term.sexp_of_ast
+  print_newline
+  >> print_endline
+  >> Sexplib.Sexp.to_string_hum
+  >> Term.sexp_of_declaration Term.sexp_of_ast
 ;;
 
 let compile (module Backend : Codegen.M) (path : string)

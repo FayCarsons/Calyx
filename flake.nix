@@ -53,6 +53,23 @@
             cmdliner
           ];
         };
+
+        packages.default = ocamlPackages.buildDunePackage {
+          pname = "calyx";
+          version = "0.1.0";
+          src = ./.;
+          buildInputs = with ocamlPackages; [
+            menhir
+            menhirLib
+            ppx_deriving
+            ppx_sexp_conv
+            ppx_sexp_value
+            sexplib
+            base
+            core
+            cmdliner
+          ];
+        };
       }
     );
 }

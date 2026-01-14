@@ -64,6 +64,11 @@ let execute (module Backend : Codegen.M) (cmd : string) =
     Printf.printf "Program stopped by signal %d:\n%s" signal output
 ;;
 
+let print_ast_sexp =
+  let ( >> ) = Fun.compose in
+  print_endline >> Sexplib.Sexp.to_string_hum >> Term.sexp_of_declaration Term.sexp_of_ast
+;;
+
 let compile (module Backend : Codegen.M) (path : string)
   : (string, CalyxError.t list) result
   =
@@ -75,19 +80,15 @@ let compile (module Backend : Codegen.M) (path : string)
   in
   let desugared = List.map Term.desugar_toplevel toplevels in
   print_endline "Desugared:";
-  List.iter (Fun.compose print_string (Term.show_declaration Term.pp_ast)) desugared;
-  print_newline ();
+  List.iter print_ast_sexp desugared;
   let* inferred, solutions = Checker.infer_toplevel desugared in
   print_endline "Inferred:";
-  List.iter (Fun.compose print_string (Term.show_declaration Term.pp_ast)) inferred;
-  print_newline ();
+  List.iter print_ast_sexp inferred;
   let zonked = List.map (Zonk.zonk_toplevel solutions) inferred in
   print_endline "Zonked:";
-  List.iter (Fun.compose print_string (Term.show_declaration Term.pp_ast)) zonked;
-  print_newline ();
+  List.iter print_ast_sexp zonked;
   let ir = Ir.convert zonked in
   print_endline "IR:";
   List.iter (Fun.compose print_string Ir.PrettyIR.declaration) ir;
-  print_newline ();
   Result.ok @@ Backend.compile ir
 ;;

@@ -1,10 +1,9 @@
 open Core
-open Util
 
 let rec zonk : Term.ast -> Term.ast = function
   | `Meta m ->
     (match Solve.Solution.solution m with
-     | Some v -> Checker.quote 0 $ zonk_value v
+     | Some v -> Checker.quote 0 @@ zonk_value v
      | None -> `Meta m)
   | `App (f, x) -> `App (zonk f, zonk x)
   | `Lam (x, body) -> `Lam (x, zonk body)
@@ -20,7 +19,9 @@ let rec zonk : Term.ast -> Term.ast = function
     `Infix { left = zonk left; op = zonk op; right = zonk right }
   | t -> t
 
-and zonk_lit lit = Term.over_literal zonk lit
+(* I can't eta reduce this?? OCaml... *)
+and zonk_lit : Term.ast Term.literal -> Term.ast Term.literal =
+  fun lit -> Term.over_literal zonk lit
 
 and zonk_value : Term.value -> Term.value = function
   | `Neutral (NMeta m) ->

@@ -11,6 +11,7 @@ type 'a base =
   | `Match of 'a * ('a pattern * 'a) list
   | `Err of CalyxError.t
   ]
+[@@deriving show, sexp]
 
 and 'a literal =
   | Int of int
@@ -173,7 +174,7 @@ type 'a declaration =
       ; params : (Ident.t * 'a) list
       ; fields : (Ident.t * 'a) list
       }
-[@@deriving show]
+[@@deriving show, sexp]
 
 let desugar_toplevel = function
   | Function { ident; typ; body } ->
@@ -190,40 +191,3 @@ let desugar_toplevel = function
     and fields = List.map ~f:(Tuple.second desugar) fields in
     RecordDecl { ident; params; fields }
 ;;
-
-module Object = struct
-  (** JSON-like primitive for attributes 
-    So a declaration can have an annotation like: 
-    ```haskell 
-    @infix{prec = 4; assoc = "left"}
-    def (<$>) (f : A -> B) [Functor T] (x : T A) -> T B do
-      Functor.map f x
-    ```
-
-    Alternatively global settings or special declarations can be done like: 
-    ```
-    module MyShader (
-      @target = WGSL
-    , @stage = Fragment
-    , myFunction
-    , MyType(..)
-    ) where
-
-    NOTE: This syntax isn't great - let's re-evaluate soon
-    ```
- *)
-  type t =
-    | Int of int
-    | Float of float
-    | Bool of bool
-    | String of string
-    | Identifier of Ident.t
-    | Array of t list
-    | Object of (Ident.t * t) list
-end
-
-type calyx_module =
-  { ident : Ident.t
-  ; metadata : Object.t list
-  ; declarations : ast declaration list
-  }

@@ -1,6 +1,5 @@
 open Core
 
-let ( $ ) = ( @@ )
 let ( let* ) = Result.Let_syntax.( >>= )
 let ( and* ) x f = Core.Result.bind x ~f
 let ( >>= ) x f = Core.Result.bind x ~f

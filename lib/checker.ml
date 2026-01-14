@@ -89,7 +89,8 @@ let rec quote (lvl : int) : Term.value -> Term.ast = function
   | `Opaque ->
     failwith "Cannot quote opaque values - they should not appear in quotable contexts"
   | #base as b -> (Term.over_base (quote lvl) b :> Term.ast)
-  | otherwise -> failwith (Printf.sprintf "Cannot handle '%s'" $ Term.show_value otherwise)
+  | otherwise ->
+    failwith (Printf.sprintf "Cannot handle '%s'" @@ Term.show_value otherwise)
 
 and quote_neutral (lvl : int) : neutral -> Term.ast = function
   | NVar (_, x) -> `Var x
@@ -106,7 +107,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
   (* PI : (a : A) -> B *)
   | `Pi (x, dom, cod) ->
     print_endline "infer.Pi";
-    let* value = Result.map ~f:eval $ check dom `Type in
+    let* value = Result.map ~f:eval @@ check dom `Type in
     let* _ = Env.local ~f:(Env.with_binding x ~value) (fun () -> check cod `Type) in
     Ok (`Type, `Pi (x, dom, cod))
   (* LAM : \x -> x *)
@@ -126,7 +127,8 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
       | `Neutral (NMeta _) ->
         let dom = `Neutral (NMeta (Meta.fresh ())) in
         let cod = `Neutral (NMeta (Meta.fresh ())) in
-        Solve.Constraints.(tell $ Unify (tf, `Pi (Intern.underscore, dom, Fun.const cod)));
+        Solve.Constraints.(
+          tell @@ Equals (tf, `Pi (Intern.underscore, dom, Fun.const cod)));
         Ok (dom, cod)
       | otherwise -> Error (`Expected ("function", Term.show_value otherwise))
     in
@@ -164,7 +166,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     print_endline "infer.Proj";
     let* te, e' = infer term in
     let field_ty = `Neutral (NMeta (Meta.fresh ())) in
-    Solve.Constraints.(tell $ HasField (field, te, field_ty));
+    Solve.Constraints.(tell @@ HasField (field, te, field_ty));
     Ok (field_ty, `Ann (`Proj (e', field), quote 0 field_ty))
   | `Pos (p, term) ->
     print_endline "infer.Pos";
@@ -182,7 +184,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     (match arm_types with
      | [] -> Error (`Expected ("non-empty match", "empty match"))
      | first_ty :: rest_types ->
-       let unify_first ty = Solve.Constraints.(tell $ Unify (first_ty, ty)) in
+       let unify_first ty = Solve.Constraints.(tell @@ Equals (first_ty, ty)) in
        List.iter ~f:unify_first rest_types;
        Ok
          ( first_ty
@@ -242,8 +244,8 @@ and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
   | `Lam (x, body), `Neutral (NMeta _ as m) ->
     let dom = `Neutral (NMeta (Meta.fresh ())) in
     let cod = `Neutral (NMeta (Meta.fresh ())) in
-    Solve.Constraints.(tell @@ Unify (`Neutral m, `Pi (x, dom, Fun.const cod)));
-    let* body' = Env.fresh_var x dom $ fun _ -> check body cod in
+    Solve.Constraints.(tell @@ Equals (`Neutral m, `Pi (x, dom, Fun.const cod)));
+    let* body' = Env.fresh_var x dom (fun _ -> check body cod) in
     Ok (`Lam (x, body'))
   | `Let (ident, ty, value, body), expected ->
     print_endline "Computing vty";
@@ -268,13 +270,12 @@ and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
   | `Ann (expression, typ), expected ->
     let* _ = check typ `Type in
     let typ' = eval typ in
-    Solve.Constraints.(tell @@ Unify (typ', expected));
+    Solve.Constraints.(tell @@ Equals (typ', expected));
     let* x = check expression typ' in
     Ok (`Ann (x, typ))
   | term, expected ->
     let* inferred, term' = infer term in
-    (* FIXME: Crash happens here *)
-    Solve.Constraints.(tell @@ Unify (inferred, expected));
+    Solve.Constraints.(tell @@ Equals (inferred, expected));
     Ok term'
 
 and row_extract : Ident.t -> Term.value Ident.Map.t -> (Term.value, CalyxError.t) result =

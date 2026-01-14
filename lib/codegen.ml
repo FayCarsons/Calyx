@@ -66,7 +66,7 @@ module WGSL : M = struct
   ;;
 
   let record_literal type_name fields =
-    Printf.sprintf "%s(%s)" type_name (String.concat ~sep:"," $ List.map ~f:snd fields)
+    Printf.sprintf "%s(%s)" type_name (String.concat ~sep:"," @@ List.map ~f:snd fields)
   ;;
 
   let proj term field = Printf.sprintf "%s.%s" term (name field)

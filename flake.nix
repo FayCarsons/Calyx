@@ -22,53 +22,44 @@
             });
           }
         );
+        deps = with ocamlPackages; [
+          zstd
+          ocaml
+          dune_3
+          findlib
+          ocaml-lsp
+          ocamlformat
+          odoc
+          utop
+          merlin
+          fzf
+
+          nodejs-slim_latest
+
+          # OCaml libs
+          menhir
+          menhirLib
+          ppx_deriving
+          ppx_sexp_conv
+          ppx_sexp_value
+          qcheck
+          sexplib
+          base
+          core
+          cmdliner
+        ];
       in
       with pkgs;
       {
         devShells.default = mkShell {
-          buildInputs = with ocamlPackages; [
-            zstd
-            ocaml
-            dune_3
-            findlib
-            ocaml-lsp
-            ocamlformat
-            odoc
-            utop
-            merlin
-            fzf
-
-            nodejs-slim_latest
-
-            # OCaml libs
-            menhir
-            menhirLib
-            ppx_deriving
-            ppx_sexp_conv
-            ppx_sexp_value
-            qcheck
-            sexplib
-            base
-            core
-            cmdliner
-          ];
+          buildInputs = deps;
         };
 
         packages.default = ocamlPackages.buildDunePackage {
           pname = "calyx";
           version = "0.1.0";
           src = ./.;
-          buildInputs = with ocamlPackages; [
-            menhir
-            menhirLib
-            ppx_deriving
-            ppx_sexp_conv
-            ppx_sexp_value
-            sexplib
-            base
-            core
-            cmdliner
-          ];
+          buildInputs = deps;
         };
       }
     );

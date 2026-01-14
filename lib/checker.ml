@@ -88,7 +88,7 @@ let rec quote (lvl : int) : Term.value -> Term.ast = function
     `Lit (Record fields)
   | `Opaque ->
     failwith "Cannot quote opaque values - they should not appear in quotable contexts"
-  | #base as b -> (Term.over_base (quote lvl) b :> Term.ast)
+  | #base as b -> (Term.map_base (quote lvl) b :> Term.ast)
   | otherwise ->
     failwith (Printf.sprintf "Cannot handle '%s'" @@ Term.show_value otherwise)
 

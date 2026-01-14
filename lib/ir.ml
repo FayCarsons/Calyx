@@ -73,8 +73,8 @@ type declaration =
       }
   | RecordType of
       { ident : Ident.t
-      ; params : (Ident.t * ty) list
-      ; fields : (Ident.t * ty) list
+      ; params : ty Ident.Map.t
+      ; fields : ty Ident.Map.t
       }
 
 module PrettyIR = struct
@@ -155,18 +155,16 @@ module PrettyIR = struct
         (ir value)
     | RecordType { ident; params; fields } ->
       let params =
-        List.map
-          ~f:(fun (ident, ty) ->
-            Printf.sprintf "(%s : %s)" (Ident.Intern.lookup ident) (ir_ty ty))
-          params
+        Map.to_alist params
+        |> List.map ~f:(fun (ident, ty) ->
+          Printf.sprintf "(%s : %s)" (Ident.Intern.lookup ident) (ir_ty ty))
         |> String.concat ~sep:" "
       in
       let fields =
-        String.concat ~sep:"\n"
-        @@ List.map
-             ~f:(fun (ident, ty) ->
-               Printf.sprintf "%s : %s" (Ident.Intern.lookup ident) (ir_ty ty))
-             fields
+        Map.to_alist fields
+        |> List.map ~f:(fun (ident, ty) ->
+          Printf.sprintf "%s : %s" (Ident.Intern.lookup ident) (ir_ty ty))
+        |> String.concat ~sep:"\n"
       in
       Printf.sprintf "data %s %s where\n%s\n\n" (Ident.Intern.lookup ident) params fields
   ;;
@@ -179,8 +177,6 @@ module Context = struct
 
   include Writer.Make (M)
 end
-
-open Util
 
 (* Shared lambda lifting utilities *)
 
@@ -317,8 +313,8 @@ let convert : Term.ast Term.declaration list -> declaration list =
       let ty = convert_type typ in
       Constant { ident; ty; value }
     | Term.RecordDecl { ident; params; fields } ->
-      let params = List.map ~f:(Tuple.second convert_type) params
-      and fields = List.map ~f:(Tuple.second convert_type) fields in
+      let params = Map.map ~f:convert_type params
+      and fields = Map.map ~f:convert_type fields in
       RecordType { ident; params; fields }
   in
   let x, xs = Context.handle (fun () -> Fresh.handle (fun () -> List.map ~f:go decls)) in

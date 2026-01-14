@@ -24,6 +24,7 @@ and 'a literal =
       Format.fprintf fmt "{";
       Map.iteri m ~f:(fun ~key ~data:_ -> Format.fprintf fmt "%a " Ident.pp key);
       Format.fprintf fmt "}"]
+[@@deriving show, sexp]
 
 and 'a pattern =
   | PVar of Ident.t
@@ -31,6 +32,7 @@ and 'a pattern =
   | PCtor of Ident.t * 'a pattern list
   | PLit of 'a literal
   | PRec of (Ident.t * 'a pattern) list
+[@@deriving show, sexp]
 
 and 'a infix =
   { left : 'a
@@ -62,7 +64,7 @@ let map_infix f { left; op; right } =
   { left; op; right }
 ;;
 
-let over_base (tf : 'a -> 'b) : 'a base -> 'b base = function
+let map_base (tf : 'a -> 'b) : 'a base -> 'b base = function
   | `App (f, x) -> `App (tf f, tf x)
   | `Infix inf -> `Infix (map_infix tf inf)
   | `Ann (x, t) -> `Ann (tf x, tf t)
@@ -80,19 +82,13 @@ let is_annotation : type a. a base -> bool = function
   | _ -> false
 ;;
 
-(* Terms have syntactic binders *)
+(* ['a term_binders] allows us to abstract over binders, i.e. HOAS for [value] *)
 type 'a term_binders =
   [ `Lam of Ident.t * 'a
   | `Pi of Ident.t * 'a * 'a
   | `Let of Ident.t * 'a option * 'a * 'a
   ]
-[@@deriving show, sexp]
-
-let over_term_binders (tf : 'a -> 'b) : 'a term_binders -> 'b term_binders = function
-  | `Lam (x, body) -> `Lam (x, tf body)
-  | `Pi (x, dom, cod) -> `Pi (x, tf dom, tf cod)
-  | `Let (x, ty, v, body) -> `Let (x, Option.map ~f:tf ty, tf v, tf body)
-;;
+[@@deriving show, sexp, map]
 
 type cst =
   [ cst base
@@ -120,8 +116,8 @@ let rec desugar : cst -> ast = function
     `Match
       ( cond
       , [ PVar (Ident.Intern.intern "True"), t; PVar (Ident.Intern.intern "False"), f ] )
-  | #base as b -> (over_base desugar b :> ast)
-  | #term_binders as binder -> (over_term_binders desugar binder :> ast)
+  | #base as b -> (map_base desugar b :> ast)
+  | #term_binders as binder -> (map_term_binders desugar binder :> ast)
 ;;
 
 (* HOAS encoding *)
@@ -171,8 +167,8 @@ type 'a declaration =
       }
   | RecordDecl of
       { ident : Ident.t
-      ; params : (Ident.t * 'a) list
-      ; fields : (Ident.t * 'a) list
+      ; params : 'a Ident.Map.t
+      ; fields : 'a Ident.Map.t
       }
 [@@deriving show, sexp]
 
@@ -186,8 +182,7 @@ let desugar_toplevel = function
     and body = desugar body in
     Constant { ident; typ; body }
   | RecordDecl { ident; params; fields } ->
-    let open Util in
-    let params = List.map ~f:(Tuple.second desugar) params
-    and fields = List.map ~f:(Tuple.second desugar) fields in
+    let params = Map.map ~f:desugar params
+    and fields = Map.map ~f:desugar fields in
     RecordDecl { ident; params; fields }
 ;;

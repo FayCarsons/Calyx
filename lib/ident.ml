@@ -69,9 +69,10 @@ module Map = struct
 
   let pp pp_val fmt m =
     Format.fprintf fmt "{";
-    Core.Map.iteri m ~f:(fun ~key ~data ->
+    Map.iteri m ~f:(fun ~key ~data ->
       Format.fprintf fmt "%s: %a; " (Intern.lookup key) pp_val data);
     Format.fprintf fmt "}"
+  ;;
 end
 
 include Ident

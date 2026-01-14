@@ -70,8 +70,8 @@ let let_decl :=
 let data_decl :=
   | DATA; ident = IDENT; params = list(type_param); WHERE; 
     fields = list(constructor); option(END); {
-      let params = List.map (fun (x, ty) -> (x, ty)) params in
-      let fields = List.map (fun (n, t) -> (n, t)) fields in
+      let params = Ident.Map.of_alist_exn params in
+      let fields = Ident.Map.of_alist_exn fields in
       RecordDecl { ident; params; fields }
     }
 

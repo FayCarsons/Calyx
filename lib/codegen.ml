@@ -198,10 +198,10 @@ module WGSL : M = struct
       Printf.sprintf "const %s: %s = %s;\n" (name ident) (compile_type ty) (compile_expr value)
     | RecordType { ident; params = _; fields } ->
       let fields_str =
-        String.concat ~sep:",\n  "
-        @@ List.map
-             ~f:(fun (field, ty) -> Printf.sprintf "%s: %s" (name field) (compile_type ty))
-             fields
+        Map.to_alist fields 
+        |> List.map
+          ~f:(fun (field, ty) -> Printf.sprintf "%s: %s" (name field) (compile_type ty))
+        |> String.concat ~sep:",\n  "
       in
       Printf.sprintf "struct %s {\n  %s\n}\n" (name ident) fields_str
   ;;

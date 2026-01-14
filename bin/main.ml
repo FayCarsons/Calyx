@@ -26,7 +26,7 @@ let compile backend path =
   | Error es ->
     Printf.printf
       "Failed to compile:\n%s"
-      (String.concat ~sep:"\n" @@ List.map ~f:Pretty.error es)
+      (String.concat ~sep:"\n" @@ List.map ~f:CalyxError.show es)
 ;;
 
 let path =

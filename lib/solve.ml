@@ -1,3 +1,4 @@
+open Core
 open Util
 
 module Constraints = struct
@@ -12,17 +13,19 @@ module Constraints = struct
       | Fragment
       | Vertex
       | Compute
+    [@@deriving show, sexp]
 
     let pretty = function
-      | Unify (a, b) -> Printf.sprintf "Unify %s %s" (Pretty.value a) (Pretty.value b)
+      | Unify (a, b) ->
+        Printf.sprintf "Unify %s %s" (Term.show_value a) (Term.show_value b)
       | HasField (ident, ty, tm) ->
         Printf.sprintf
           "HasField %s %s %s"
           (Ident.Intern.lookup ident)
-          (Pretty.value ty)
-          (Pretty.value tm)
+          (Term.show_value ty)
+          (Term.show_value tm)
       | HasStage (tm, stage) ->
-        Printf.sprintf "HasStage %s %s" (Pretty.value tm)
+        Printf.sprintf "HasStage %s %s" (Term.show_value tm)
         @@
           (match stage with
           | Fragment -> "Fragment"
@@ -89,9 +92,7 @@ let rec force : value -> value = function
 ;;
 
 let force_row (r : row) : row =
-  { fields = List.map (fun (l, v) -> l, force v) r.fields
-  ; tail = Option.map force r.tail
-  }
+  { fields = Map.map r.fields ~f:force; tail = Option.map r.tail ~f:force }
 ;;
 
 let rec occurs (m : Meta.t) (v : value) : bool =
@@ -117,14 +118,14 @@ and occurs_neutral m = function
   | _ -> false
 
 and occurs_row m r =
-  List.exists (fun v -> occurs m @@ snd v) r.fields || is_some_and (occurs m) r.tail
+  Map.exists r.fields ~f:(fun v -> occurs m v) || is_some_and (occurs m) r.tail
 
 and occurs_lit m = function
-  | Record fields -> List.exists (fun v -> occurs m @@ snd v) fields
+  | Record fields -> Map.exists fields ~f:(occurs m)
   | _ -> false
 ;;
 
-let solve_meta (m : Meta.t) (v : value) : (unit, Error.t) result =
+let solve_meta (m : Meta.t) (v : value) : (unit, CalyxError.t) result =
   match occurs m v with
   | true -> Error (`Occurs m)
   | false ->
@@ -132,9 +133,9 @@ let solve_meta (m : Meta.t) (v : value) : (unit, Error.t) result =
     Ok ()
 ;;
 
-let ( let* ) = Result.bind
+let ( let* ) = Result.Let_syntax.( >>= )
 
-let rec unify : value -> value -> (unit, Error.t) result =
+let rec unify : value -> value -> (unit, CalyxError.t) result =
   fun a b ->
   let a = force a
   and b = force b in
@@ -168,14 +169,14 @@ let rec unify : value -> value -> (unit, Error.t) result =
     else
       Error
         (`UnificationFailure
-            ( Pretty.neutral (NVar (l_level, l_name))
-            , Pretty.neutral (NVar (r_level, r_name)) ))
+            ( Term.show_neutral (NVar (l_level, l_name))
+            , Term.show_neutral (NVar (r_level, r_name)) ))
   | `Neutral l, `Neutral r -> unify_neutral l r
   | `Lit l, `Lit r -> unify_lit l r
   | `Err _, _ | _, `Err _ -> Ok ()
-  | a, b -> Error (`UnificationFailure (Pretty.value a, Pretty.value b))
+  | a, b -> Error (`UnificationFailure (Term.show_value a, Term.show_value b))
 
-and unify_neutral : neutral -> neutral -> (unit, Error.t) result =
+and unify_neutral : neutral -> neutral -> (unit, CalyxError.t) result =
   fun l r ->
   match l, r with
   | NVar (l_level, l_name), NVar (r_level, r_name)
@@ -187,7 +188,7 @@ and unify_neutral : neutral -> neutral -> (unit, Error.t) result =
   | NProj (tm, field), NProj (tm', field') when Ident.equal field field' ->
     unify_neutral tm tm'
   (* Neutrals mismatch*)
-  | l, r -> Error (`UnificationFailure (Pretty.neutral l, Pretty.neutral r))
+  | l, r -> Error (`UnificationFailure (Term.show_neutral l, Term.show_neutral r))
 
 and unify_lit l r =
   match l, r with
@@ -196,88 +197,88 @@ and unify_lit l r =
   | Bool a, Bool b when Bool.equal a b -> Ok ()
   | Record l, Record r ->
     let sorted_l : (Ident.t * value) list =
-      List.sort_uniq (fun a b -> Ident.compare (fst a) (fst b)) l
+      List.sort ~compare:(fun a b -> Ident.compare (fst a) (fst b)) (Map.to_alist l)
     and sorted_r : (Ident.t * value) list =
-      List.sort_uniq (fun a b -> Ident.compare (fst a) (fst b)) r
+      List.sort ~compare:(fun a b -> Ident.compare (fst a) (fst b)) (Map.to_alist r)
     in
-    let fields_l = List.map fst sorted_l
-    and fields_r = List.map fst sorted_r in
+    let fields_l = List.map ~f:fst sorted_l
+    and fields_r = List.map ~f:fst sorted_r in
     if List.equal Ident.equal fields_l fields_r
     then (
-      List.iter2
-        (fun (_, v1) (_, v2) -> Constraints.tell @@ Unify (v1, v2))
+      List.iter2_exn
+        ~f:(fun (_, v1) (_, v2) -> Constraints.tell @@ Unify (v1, v2))
         sorted_l
         sorted_r;
       Ok ())
     else Error (`UnificationFailure ("record fields mismatch", "record fields mismatch"))
   | _, _ -> Error `Todo
 
-and unify_rows : row -> row -> (unit, Error.t) result =
+and unify_rows : row -> row -> (unit, CalyxError.t) result =
   fun l r ->
   let l = force_row l
   and r = force_row r in
-  let module M = Map.Make (Ident) in
-  let left_fields = M.of_list l.fields
-  and right_fields = M.of_list r.fields in
-  M.union
-    (fun _label v1 v2 ->
-       Constraints.(tell $ Unify (v1, v2));
-       None)
+  let module M = Ident.Map in
+  let left_fields = l.fields
+  and right_fields = r.fields in
+  Map.iter2
+    ~f:(fun ~key:_ ~data ->
+      match data with
+      | `Both (v1, v2) -> Constraints.(tell $ Unify (v1, v2))
+      | _ -> ())
     left_fields
     right_fields
   |> ignore;
   let only_left =
-    M.filter (fun k _ -> not (M.mem k right_fields)) left_fields |> M.bindings
+    Map.filter_keys ~f:(fun k -> not (Map.mem right_fields k)) left_fields
   in
   let only_right =
-    M.filter (fun k _ -> not @@ M.mem k left_fields) right_fields |> M.bindings
+    Map.filter_keys ~f:(fun k -> not @@ Map.mem left_fields k) right_fields
   in
   let tail_meta = `Neutral (NMeta (Meta.fresh ())) in
   let tail = Some tail_meta in
   Option.iter
-    (fun (l, r) ->
-       Constraints.(tell $ Unify (l, `Row { fields = only_right; tail }));
-       Constraints.(tell $ Unify (r, `Row { fields = only_left; tail })))
+    ~f:(fun (l, r) ->
+      Constraints.(tell $ Unify (l, `Row { fields = only_right; tail }));
+      Constraints.(tell $ Unify (r, `Row { fields = only_left; tail })))
     (Tuple.into <$> l.tail <*> r.tail);
   Ok ()
 
 and vapp =
   fun f x ->
   match f with
-  | `Lam (_, body) -> Result.ok @@ body x
-  | `Neutral n -> Result.ok @@ `Neutral (NApp (n, x))
-  | otherwise -> Error (`Expected ("function", Pretty.value otherwise))
+  | `Lam (_, body) -> Result.return @@ body x
+  | `Neutral n -> Result.return @@ `Neutral (NApp (n, x))
+  | otherwise -> Error (`Expected ("function", Term.show_value otherwise))
 ;;
 
 type solver_error =
   | Stuck of
       { stuck : Constraints.t list
-      ; errors : Error.t list
+      ; errors : CalyxError.t list
       }
-  | Errors of Error.t list
+  | Errors of CalyxError.t list
 
 let pretty_solver_error = function
   | Stuck { stuck; errors } ->
     Printf.sprintf
       "Stuck!\nCould not solve constraints:\n%s\nWith errors:\n%s\n"
-      (String.concat ", " @@ List.map Constraints.pretty stuck)
-      (String.concat ", " @@ List.map Pretty.error errors)
+      (String.concat ~sep:", " @@ List.map ~f:Constraints.pretty stuck)
+      (String.concat ~sep:", " @@ List.map ~f:CalyxError.show errors)
   | Errors es ->
     Printf.sprintf
       "Failed to solve due to errors:\n%s\n"
-      (String.concat ", " @@ List.map Pretty.error es)
+      (String.concat ~sep:", " @@ List.map ~f:CalyxError.show es)
 ;;
 
 let rec solve (initial : Constraints.t list) : (unit, solver_error) result =
   let progressed = ref false in
   let (_, next), errors =
-    Error.handle (fun () ->
+    CalyxError.handle (fun () ->
       Constraints.handle (fun () ->
         List.iter
-          (fun c ->
-             print_endline
-               (Printf.sprintf "SOLVING CONSTRAINT: %s" (Constraints.pretty c));
-             progressed := solve_one c)
+          ~f:(fun c ->
+            print_endline (Printf.sprintf "SOLVING CONSTRAINT: %s" (Constraints.pretty c));
+            progressed := solve_one c)
           initial))
   in
   match next, errors, !progressed with
@@ -288,18 +289,18 @@ let rec solve (initial : Constraints.t list) : (unit, solver_error) result =
 
 and solve_one = function
   | Unify (a, b) ->
-    Printf.printf "SOLVING UNIFY '%s' '%s'\n" (Pretty.value a) (Pretty.value b);
+    Printf.printf "SOLVING UNIFY '%s' '%s'\n" (Term.show_value a) (Term.show_value b);
     (match unify a b with
      | Ok () ->
        print_endline "SUCCEEDED";
        true
      | Error e ->
        print_endline "FAILED";
-       Error.tell e;
+       CalyxError.tell e;
        true)
   | HasField (label, record, field) -> solve_record label record field
   | HasStage _ ->
-    Error.tell `Todo;
+    CalyxError.tell `Todo;
     true
 
 and solve_record : Ident.t -> value -> value -> bool =
@@ -309,19 +310,19 @@ and solve_record : Ident.t -> value -> value -> bool =
     (match force row_val with
      | `Row r ->
        Option.iter
-         (fun ty -> Constraints.(tell $ Unify (field, ty)))
-         (List.assoc_opt label r.fields);
+         ~f:(fun ty -> Constraints.(tell $ Unify (field, ty)))
+         (Map.find r.fields label);
        true
      | `Neutral (NMeta _) ->
        Constraints.(tell @@ HasField (label, record, field));
        false
      | _ ->
-       Error.tell @@ `Expected ("row", Pretty.value row_val);
+       CalyxError.tell @@ `Expected ("row", Term.show_value row_val);
        true)
   | `Neutral (NMeta _) ->
     Constraints.tell @@ HasField (label, record, field);
     false
   | _ ->
-    Error.tell @@ `Expected ("record", Pretty.value record);
+    CalyxError.tell @@ `Expected ("record", Term.show_value record);
     true
 ;;

@@ -1,3 +1,4 @@
+open Core
 open Util
 open Term
 module Intern = Ident.Intern
@@ -7,7 +8,7 @@ let over_literal (f : 'a -> 'b) : 'a Term.literal -> 'b Term.literal = function
   | UInt n -> UInt n
   | Float x -> Float x
   | Bool b -> Bool b
-  | Record fields -> Record (List.map (fun (i, x) -> i, f x) fields)
+  | Record fields -> Record (Map.map ~f fields)
 ;;
 
 let rec eval : Term.ast -> Term.value = function
@@ -35,7 +36,8 @@ let rec eval : Term.ast -> Term.value = function
   | `Let (ident, None, value, body) ->
     let value = eval value in
     Env.local ~f:(Env.with_binding ident ~value) (fun () -> eval body)
-  | `Match (scrut, arms) -> `Match (eval scrut, List.map (Tuple.bimap pattern eval) arms)
+  | `Match (scrut, arms) ->
+    `Match (eval scrut, List.map ~f:(Tuple.bimap pattern eval) arms)
   | `Pos (pos, exp) -> Env.local ~f:(Env.with_pos pos) (fun () -> eval exp)
   | `Lit lit -> `Lit (over_literal eval lit)
   | `Meta m -> `Neutral (NMeta m)
@@ -53,16 +55,16 @@ and app f x =
   | _ -> failwith "Apply non-function"
 
 and proj (field : Ident.t) : Term.value -> Term.value = function
-  | `Lit (Record fields) -> List.assoc field fields
+  | `Lit (Record fields) -> Map.find_exn fields field
   | `Neutral n -> `Neutral (NProj (n, field))
   | _ -> failwith "Projection from non-record"
 
 and pattern : Term.ast Term.pattern -> Term.value Term.pattern = function
   | PVar x -> PVar x
   | PWild -> PWild
-  | PCtor (ctor, args) -> PCtor (ctor, List.map pattern args)
+  | PCtor (ctor, args) -> PCtor (ctor, List.map ~f:pattern args)
   | PLit lit -> PLit (over_literal eval lit)
-  | PRec fields -> PRec (List.map (Tuple.second pattern) fields)
+  | PRec fields -> PRec (List.map ~f:(Tuple.second pattern) fields)
 ;;
 
 let rec quote (lvl : int) : Term.value -> Term.ast = function
@@ -79,15 +81,15 @@ let rec quote (lvl : int) : Term.value -> Term.ast = function
   | `Err e -> `Err e
   | `Rec r -> quote lvl r
   | `Row { fields; tail = None } ->
-    let fields = List.map (Tuple.second (quote lvl)) fields in
+    let fields = Map.map ~f:(quote lvl) fields in
     `Lit (Record fields)
   | `Row { fields; tail = Some (`Neutral (NMeta _)) } ->
-    let fields = List.map (Tuple.second (quote lvl)) fields in
+    let fields = Map.map ~f:(quote lvl) fields in
     `Lit (Record fields)
   | `Opaque ->
     failwith "Cannot quote opaque values - they should not appear in quotable contexts"
   | #base as b -> (Term.over_base (quote lvl) b :> Term.ast)
-  | otherwise -> failwith (Printf.sprintf "Cannot handle '%s'" $ Pretty.value otherwise)
+  | otherwise -> failwith (Printf.sprintf "Cannot handle '%s'" $ Term.show_value otherwise)
 
 and quote_neutral (lvl : int) : neutral -> Term.ast = function
   | NVar (_, x) -> `Var x
@@ -96,15 +98,15 @@ and quote_neutral (lvl : int) : neutral -> Term.ast = function
   | NProj (term, field) -> `Proj (quote_neutral lvl term, field)
 ;;
 
-let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
+let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = function
   | `Var i ->
     print_endline "infer.Var";
-    let* ty = Env.lookup_type i |> Option.to_result ~none:(`NotFound i) in
+    let* ty = Env.lookup_type i |> Result.of_option ~error:(`NotFound i) in
     Ok (ty, `Ann (`Var i, quote 0 ty))
   (* PI : (a : A) -> B *)
   | `Pi (x, dom, cod) ->
     print_endline "infer.Pi";
-    let* value = Result.map eval $ check dom `Type in
+    let* value = Result.map ~f:eval $ check dom `Type in
     let* _ = Env.local ~f:(Env.with_binding x ~value) (fun () -> check cod `Type) in
     Ok (`Type, `Pi (x, dom, cod))
   (* LAM : \x -> x *)
@@ -126,7 +128,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
         let cod = `Neutral (NMeta (Meta.fresh ())) in
         Solve.Constraints.(tell $ Unify (tf, `Pi (Intern.underscore, dom, Fun.const cod)));
         Ok (dom, cod)
-      | otherwise -> Error (`Expected ("function", Pretty.value otherwise))
+      | otherwise -> Error (`Expected ("function", Term.show_value otherwise))
     in
     let* x' = check x dom in
     Ok (cod, `Ann (`App (f, x'), quote 0 cod))
@@ -174,14 +176,14 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
       let* body_ty, body' = infer body in
       Ok ((pattern, `Ann (body', quote 0 body_ty)), body_ty)
     in
-    let* arms_and_types = sequence @@ List.map infer_arm arms in
-    let annotated_arms = List.map fst arms_and_types in
-    let arm_types = List.map snd arms_and_types in
+    let* arms_and_types = sequence @@ List.map ~f:infer_arm arms in
+    let annotated_arms = List.map ~f:fst arms_and_types in
+    let arm_types = List.map ~f:snd arms_and_types in
     (match arm_types with
      | [] -> Error (`Expected ("non-empty match", "empty match"))
      | first_ty :: rest_types ->
        let unify_first ty = Solve.Constraints.(tell $ Unify (first_ty, ty)) in
-       List.iter unify_first rest_types;
+       List.iter ~f:unify_first rest_types;
        Ok
          ( first_ty
          , `Ann
@@ -215,13 +217,13 @@ let rec infer : Term.ast -> (Term.value * Term.ast, Error.t) result = function
        Ok (ty, `Infix { left = left'; op = op'; right = right' }))
 
 and infer_lit
-  : Term.ast Term.literal -> (Term.value * Term.ast Term.literal, Error.t) result
+  : Term.ast Term.literal -> (Term.value * Term.ast Term.literal, CalyxError.t) result
   = function
   | Int n -> Ok (`Var (Intern.intern "Int"), Int n)
   | UInt n -> Ok (`Var (Intern.intern "UInt"), UInt n)
   | Float x -> Ok (`Var (Intern.intern "Float"), Float x)
   | Bool b -> Ok (`Var (Intern.intern "Bool"), Bool b)
-  | Record structure ->
+  | Record _structure ->
     (* TODO: We should attempt to find the type name here and return an 
       `Ann (record, type_name). We cannot do this without refactoring the 
       record system in general. Term.value's `Rec and `Row shouldn't exist,
@@ -229,20 +231,9 @@ and infer_lit
       then that's a row type 100% of the time. If a record is referred to by 
       name, that's nominal. EzPz
     *)
-    let* fields =
-      sequence
-      $ List.map
-          (fun (l, e) ->
-             let* ty, e' = infer e in
-             Ok ((l, ty), (l, e')))
-          structure
-    in
-    let row_fields = List.map fst fields in
-    let ast_fields = List.map snd fields in
-    let tail = Option.some @@ `Neutral (NMeta (Meta.fresh ())) in
-    Ok (`Rec (`Row { fields = row_fields; tail }), Record ast_fields)
+    failwith "TODO"
 
-and check : Term.ast -> Term.value -> (Term.ast, Error.t) result =
+and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
   fun term expected ->
   match term, expected with
   | `Lam (x, body), `Pi (_, dom, cod) ->
@@ -286,41 +277,43 @@ and check : Term.ast -> Term.value -> (Term.ast, Error.t) result =
     Solve.Constraints.(tell @@ Unify (inferred, expected));
     Ok term'
 
-and row_extract : Ident.t -> (Ident.t * Term.value) list -> (Term.value, Error.t) result =
+and row_extract : Ident.t -> Term.value Ident.Map.t -> (Term.value, CalyxError.t) result =
   fun field fields ->
-  List.assoc_opt field fields
-  |> Option.to_result
-       ~none:
+  Map.find fields field
+  |> Result.of_option
+       ~error:
          (`NoField
-             (field, List.map (fun (label, field) -> label, Pretty.value field) fields))
+             ( field
+             , List.map ~f:(fun (label, field) -> label, Term.show_value field)
+               @@ Map.to_alist fields ))
 ;;
 
 let infer_toplevel
   :  ast declaration list
-  -> (ast declaration list * Term.value Meta.gen, Error.t list) result
+  -> (ast declaration list * Term.value Meta.gen, CalyxError.t list) result
   =
   fun program ->
   let rec go
     :  Term.ast Term.declaration list
-    -> (Term.ast Term.declaration list, Error.t list) result
+    -> (Term.ast Term.declaration list, CalyxError.t list) result
     = function
     | Function { ident; typ; body } :: rest ->
       let vty = eval typ in
       Printf.printf
         "infer_toplevel.Function { ident = %s; typ = %s; body = %s }\n"
         (Intern.lookup ident)
-        (Pretty.value vty)
-        (Pretty.ast body);
+        (Term.show_value vty)
+        (Term.show_ast body);
       let placeholder = `Neutral (NVar (Env.level (), ident)) in
       print_endline "ENTERING ENV.LOCAL";
       Env.local ~f:(Env.with_binding ident ~value:placeholder ~typ:vty) (fun () ->
-        let* body = Result.map_error Core.List.singleton @@ check body vty in
+        let* body = Result.map_error ~f:Core.List.singleton @@ check body vty in
         let typ = quote 0 vty in
-        Result.map (List.cons (Function { ident; typ; body })) @@ go rest)
+        Result.map ~f:(List.cons (Function { ident; typ; body })) @@ go rest)
     | Constant { ident; typ; body } :: rest ->
       let* typ, value =
         Result.map_error
-          Core.List.singleton
+          ~f:Core.List.singleton
           (let vty = eval typ in
            let* body_ast = check body vty in
            Ok (vty, body_ast))
@@ -328,12 +321,9 @@ let infer_toplevel
       let value = eval value in
       Env.local ~f:(Env.with_binding ident ~typ ~value) (fun () ->
         let typ = quote 0 typ in
-        Result.map (List.cons (Constant { ident; typ; body })) @@ go rest)
-    | RecordDecl { ident; fields; _ } :: rest ->
-      let fields = List.map (Tuple.second eval) fields in
-      Env.local
-        ~f:(Env.with_binding ident ~value:(`Row { fields; tail = None }) ~typ:`Type)
-        (fun () -> go rest)
+        Result.map ~f:(List.cons (Constant { ident; typ; body })) @@ go rest)
+      (* TODO: Handle records *)
+    | RecordDecl _ :: rest -> go rest
     | [] -> Ok []
   in
   let result, gen =
@@ -350,5 +340,5 @@ let infer_toplevel
              failwith "Failed to type program")
         | Error es -> Error es))
   in
-  Result.map (Tuple.intoRev gen) result
+  Result.map ~f:(Tuple.intoRev gen) result
 ;;

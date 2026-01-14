@@ -87,14 +87,11 @@ let param :=
 
 (* Type expressions *)
 let type_expr :=
-  | type_arrow
-
-let type_arrow :=
   | t = type_atom; { t }
-  | t1 = type_atom; ARROW; t2 = type_arrow; { 
+  | t1 = type_atom; ARROW; t2 = type_expr; { 
       `Pi (Ident.Intern.underscore, t1, t2) 
     }
-  | LPAREN; x = IDENT; COLON; t1 = type_expr; RPAREN; ARROW; t2 = type_arrow; {
+  | LPAREN; x = IDENT; COLON; t1 = type_expr; RPAREN; ARROW; t2 = type_expr; {
       `Pi (x, t1, t2)
     }
 
@@ -136,9 +133,6 @@ let match_arm :=
   | p = pattern; ARROW; e = expr; { (p, e) }
 
 let pattern :=
-  | pattern_app
-
-let pattern_app :=
   | x = IDENT; ps = nonempty_list(pattern_atom); { 
       PCtor (x, ps) 
     }
@@ -188,7 +182,7 @@ let expr_atom :=
   | LBRACE; fields = record_fields; RBRACE; { `Lit (Record fields) }
 
 let record_fields :=
-  | fields = separated_list(COMMA, record_field); { fields }
+  | fields = separated_list(COMMA, record_field); { Ident.Map.of_alist_exn fields }
 
 let record_field :=
   | name = IDENT; EQUALS; value = expr; { 

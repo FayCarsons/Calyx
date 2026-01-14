@@ -1,3 +1,5 @@
+open Core
+
 module M = struct
   type t =
     [ `Expected of string * string
@@ -9,6 +11,7 @@ module M = struct
     | `Parser of string
     | `Todo
     ]
+  [@@deriving show, sexp]
 end
 
 include Writer.Make (M)

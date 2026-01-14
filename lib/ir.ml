@@ -1,3 +1,5 @@
+open Core
+
 (* TODO: Currently IR primarily serves to flatten function declarations and applications, as well as do lambda lifting. 
   But eventually we want to a CPS -> ANF transform
 *)
@@ -35,6 +37,7 @@ type ty =
       }
   | TApp of ty * ty list
   | Skolem
+[@@deriving show, sexp]
 
 type t =
   | Var of Ident.t
@@ -52,9 +55,9 @@ and literal =
   | Float of float
   | Bool of bool
   (* TODO: This should hold an optional type name *)
-  | Record of (Ident.t * t) list
+  | Record of t Ident.Map.t
 
-and pattern
+and pattern = string [@@deriving show, sexp]
 
 type declaration =
   | Function of
@@ -80,7 +83,10 @@ module PrettyIR = struct
     | Var x -> Ident.Intern.lookup x
     | Lit lit -> ir_literal lit
     | App (f, xs) ->
-      Printf.sprintf "%s %s" (Ident.Intern.lookup f) (String.concat ", " @@ List.map ir xs)
+      Printf.sprintf
+        "%s %s"
+        (Ident.Intern.lookup f)
+        (String.concat ~sep:", " @@ List.map ~f:ir xs)
     | Let (ident, ty, value, body) ->
       Printf.sprintf
         "let %s: %s = %s in\n%s"
@@ -93,8 +99,8 @@ module PrettyIR = struct
     | Match (scrut, arms) ->
       let fmt_arm (pat, exp) = Printf.sprintf "| %s -> %s" pat exp in
       let arms =
-        String.concat "\n"
-        @@ List.map (Fun.compose fmt_arm (Util.Tuple.bimap ir_pattern ir)) arms
+        String.concat ~sep:"\n"
+        @@ List.map ~f:(Fun.compose fmt_arm (Util.Tuple.bimap ir_pattern ir)) arms
       in
       Printf.sprintf "match %s with\n%s" (ir scrut) arms
     | Proj (tm, field) -> Printf.sprintf "%s.%s" (ir tm) (Ident.Intern.lookup field)
@@ -106,10 +112,10 @@ module PrettyIR = struct
     | Float x -> string_of_float x
     | Bool b -> string_of_bool b
     | Record fields ->
-      List.map
-        (fun (ident, ty) -> Printf.sprintf "%s = %s" (Ident.Intern.lookup ident) (ir ty))
-        fields
-      |> String.concat ", "
+      Map.to_alist fields
+      |> List.map ~f:(fun (ident, value) ->
+        Printf.sprintf "%s = %s" (Ident.Intern.lookup ident) (ir value))
+      |> String.concat ~sep:", "
       |> Printf.sprintf "{ %s }"
 
   and ir_ty : ty -> string = function
@@ -117,9 +123,9 @@ module PrettyIR = struct
     | TFunction { args; returns } ->
       Printf.sprintf
         "(%s) -> %s"
-        (String.concat ", " @@ List.map ir_ty args)
+        (String.concat ~sep:", " @@ List.map ~f:ir_ty args)
         (ir_ty returns)
-    | TApp (f, xs) -> String.concat " " @@ (ir_ty f :: List.map ir_ty xs)
+    | TApp (f, xs) -> String.concat ~sep:" " @@ (ir_ty f :: List.map ~f:ir_ty xs)
     | Skolem -> "<Skolem>"
 
   and ir_pattern : pattern -> string = fun _ -> ""
@@ -128,10 +134,10 @@ module PrettyIR = struct
     | Function { ident; args; returns; body } ->
       let args =
         List.map
-          (fun (ident, ty) ->
-             Printf.sprintf "%s: %s" (Ident.Intern.lookup ident) (ir_ty ty))
+          ~f:(fun (ident, ty) ->
+            Printf.sprintf "%s: %s" (Ident.Intern.lookup ident) (ir_ty ty))
           args
-        |> String.concat ", "
+        |> String.concat ~sep:", "
       in
       let returns = ir_ty returns in
       let body = ir body in
@@ -150,16 +156,16 @@ module PrettyIR = struct
     | RecordType { ident; params; fields } ->
       let params =
         List.map
-          (fun (ident, ty) ->
-             Printf.sprintf "(%s : %s)" (Ident.Intern.lookup ident) (ir_ty ty))
+          ~f:(fun (ident, ty) ->
+            Printf.sprintf "(%s : %s)" (Ident.Intern.lookup ident) (ir_ty ty))
           params
-        |> String.concat " "
+        |> String.concat ~sep:" "
       in
       let fields =
-        String.concat "\n"
+        String.concat ~sep:"\n"
         @@ List.map
-             (fun (ident, ty) ->
-                Printf.sprintf "%s : %s" (Ident.Intern.lookup ident) (ir_ty ty))
+             ~f:(fun (ident, ty) ->
+               Printf.sprintf "%s : %s" (Ident.Intern.lookup ident) (ir_ty ty))
              fields
       in
       Printf.sprintf "data %s %s where\n%s\n\n" (Ident.Intern.lookup ident) params fields
@@ -193,7 +199,7 @@ let rec convert_expr : Term.ast -> t = function
       | `Ann (x, _) -> go acc x
       | other ->
         failwith
-        @@ Printf.sprintf "Illegal term in function position '%s'" (Pretty.ast other)
+        @@ Printf.sprintf "Illegal term in function position '%s'" (Term.show_ast other)
     in
     go [ convert_expr x ] f
   | `Infix Term.{ left; op; right } ->
@@ -213,8 +219,8 @@ let rec convert_expr : Term.ast -> t = function
     let open Util in
     let arms' =
       Tuple.into
-      <$> List.assoc_opt (Term.PVar (Ident.Intern.intern "True")) arms
-      <*> List.assoc_opt (Term.PVar (Ident.Intern.intern "False")) arms
+      <$> Stdlib.List.assoc_opt (Term.PVar (Ident.Intern.intern "True")) arms
+      <*> Stdlib.List.assoc_opt (Term.PVar (Ident.Intern.intern "False")) arms
     in
     (match arms' with
      | Some (then_, else_) ->
@@ -231,23 +237,23 @@ let rec convert_expr : Term.ast -> t = function
     convert_expr x
   | `Lam (x, body) ->
     print_endline "Illegal lone lambda!";
-    Printf.printf "Lam (%s, %s)" (Ident.Intern.lookup x) (Pretty.ast body);
+    Printf.printf "Lam (%s, %s)" (Ident.Intern.lookup x) (Term.show_ast body);
     failwith "Fatal!"
   | `Let (ident, Some ty, value, body) ->
     print_endline "IR.convert_expr.Ann";
     Let (ident, convert_type ty, convert_expr (`Ann (value, ty)), convert_expr body)
   | `Err e ->
     failwith
-    @@ Printf.sprintf "Error '%s' should not make it into codegen" (Pretty.error e)
+    @@ Printf.sprintf "Error '%s' should not make it into codegen" (CalyxError.show e)
   | other ->
-    failwith @@ Printf.sprintf "Illegal term in IR.convert: '%s'" (Pretty.ast other)
+    failwith @@ Printf.sprintf "Illegal term in IR.convert: '%s'" (Term.show_ast other)
 
 and convert_literal : Term.ast Term.literal -> literal = function
   | Term.Int n -> Int n
   | Term.UInt n -> UInt n
   | Term.Float x -> Float x
   | Term.Bool b -> Bool b
-  | Term.Record fields -> Record (List.map (Tuple.second convert_expr) fields)
+  | Term.Record fields -> Record (Core.Map.map ~f:convert_expr fields)
 
 (* Convert a Term.value type to IR type *)
 and convert_type : Term.ast -> ty = function
@@ -270,7 +276,7 @@ and convert_type : Term.ast -> ty = function
     failwith
     @@ Printf.sprintf
          "Illegal term in type position in Ir.convert_type: '%s'"
-         (Pretty.ast other)
+         (Term.show_ast other)
 
 (* Extract parameter types from nested Pi types *)
 and extract_pi_types (pi_type : Term.ast) =
@@ -291,12 +297,12 @@ and collect_lambda_params acc = function
 and convert_lambda_to_function ?(name_prefix = "fn") pi_type first_param body =
   let function_name = Ident.Intern.intern @@ Fresh.get name_prefix in
   let param_types = extract_pi_types pi_type in
-  let return_type = List.nth param_types (List.length param_types - 1) in
-  let arg_types = List.rev (List.tl (List.rev param_types)) in
+  let return_type = List.nth_exn param_types (List.length param_types - 1) in
+  let arg_types = List.rev (List.tl_exn (List.rev param_types)) in
   let args, converted_body = collect_lambda_params [ first_param ] body in
   let args = List.rev args in
   (* Put back in correct order *)
-  let typed_args = List.combine args arg_types in
+  let typed_args = List.zip_exn args arg_types in
   let func_decl =
     Function
       { ident = function_name
@@ -315,12 +321,12 @@ let convert : Term.ast Term.declaration list -> declaration list =
     | Term.Function { ident; typ; body } ->
       (* This is a function - use typ (the Pi type) for parameter types *)
       let param_types = extract_pi_types typ in
-      let return_type = List.nth param_types (List.length param_types - 1) in
-      let arg_types = List.rev (List.tl (List.rev param_types)) in
+      let return_type = List.nth_exn param_types (List.length param_types - 1) in
+      let arg_types = List.rev (List.tl_exn (List.rev param_types)) in
       let args, converted_body = collect_lambda_params [] body in
       let args = List.rev args in
       (* Put back in correct order *)
-      let typed_args = List.combine args arg_types in
+      let typed_args = List.zip_exn args arg_types in
       Function { ident; args = typed_args; returns = return_type; body = converted_body }
     | Term.Constant { ident; typ; body } ->
       (* This is a constant declaration *)
@@ -328,10 +334,10 @@ let convert : Term.ast Term.declaration list -> declaration list =
       let ty = convert_type typ in
       Constant { ident; ty; value }
     | Term.RecordDecl { ident; params; fields } ->
-      let params = List.map (Tuple.second convert_type) params
-      and fields = List.map (Tuple.second convert_type) fields in
+      let params = List.map ~f:(Tuple.second convert_type) params
+      and fields = List.map ~f:(Tuple.second convert_type) fields in
       RecordType { ident; params; fields }
   in
-  let x, xs = Context.handle @@ fun () -> Fresh.handle @@ fun () -> List.map go decls in
+  let x, xs = Context.handle (fun () -> Fresh.handle (fun () -> List.map ~f:go decls)) in
   List.append x xs
 ;;

@@ -64,7 +64,9 @@ let execute (module Backend : Codegen.M) (cmd : string) =
     Printf.printf "Program stopped by signal %d:\n%s" signal output
 ;;
 
-let compile (module Backend : Codegen.M) (path : string) : (string, Error.t list) result =
+let compile (module Backend : Codegen.M) (path : string)
+  : (string, CalyxError.t list) result
+  =
   Env.init (Env.from_bindings Backend.standard_library);
   let contents = In_channel.open_text path |> In_channel.input_all in
   let* toplevels =
@@ -73,15 +75,15 @@ let compile (module Backend : Codegen.M) (path : string) : (string, Error.t list
   in
   let desugared = List.map Term.desugar_toplevel toplevels in
   print_endline "Desugared:";
-  List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) desugared;
+  List.iter (Fun.compose print_string (Term.show_declaration Term.pp_ast)) desugared;
   print_newline ();
   let* inferred, solutions = Checker.infer_toplevel desugared in
   print_endline "Inferred:";
-  List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) inferred;
+  List.iter (Fun.compose print_string (Term.show_declaration Term.pp_ast)) inferred;
   print_newline ();
   let zonked = List.map (Zonk.zonk_toplevel solutions) inferred in
   print_endline "Zonked:";
-  List.iter (Fun.compose print_string (Pretty.declaration Pretty.ast)) zonked;
+  List.iter (Fun.compose print_string (Term.show_declaration Term.pp_ast)) zonked;
   print_newline ();
   let ir = Ir.convert zonked in
   print_endline "IR:";

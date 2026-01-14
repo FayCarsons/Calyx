@@ -1,9 +1,11 @@
+open Core
+
 let ( $ ) = ( @@ )
-let ( let* ) = Result.bind
-let ( and* ) = Result.bind
-let ( >>= ) = Result.bind
-let ( >>| ) = Result.map
-let ( <$> ) = Option.map
+let ( let* ) = Result.Let_syntax.( >>= )
+let ( and* ) x f = Core.Result.bind x ~f
+let ( >>= ) x f = Core.Result.bind x ~f
+let ( >>| ) x f = Core.Result.map x ~f
+let ( <$> ) f x = Core.Option.map x ~f
 
 let ( <*> ) f x =
   match f with
@@ -20,7 +22,7 @@ let is_some_and (f : 'a -> bool) : 'a option -> bool = function
 ;;
 
 let rec windows len = function
-  | _ :: _ as xs -> List.take len xs :: windows len (List.tl xs)
+  | _ :: _ as xs -> Core.List.take xs len :: windows len (Core.List.tl_exn xs)
   | [] -> []
 ;;
 
@@ -30,7 +32,7 @@ let rec pairs = function
 ;;
 
 let rec sequence = function
-  | Ok x :: xs -> Result.map (List.cons x) $ sequence xs
+  | Ok x :: xs -> Core.Result.map (sequence xs) ~f:(fun rest -> x :: rest)
   | [] -> Ok []
   | Error e :: _ -> Error e
 ;;

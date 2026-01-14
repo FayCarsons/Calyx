@@ -1,3 +1,4 @@
+open Core
 open Util
 module Intern = Ident.Intern
 
@@ -35,7 +36,7 @@ module WGSL : M = struct
   let name = Intern.lookup
 
   let standard_library =
-    Ident.Map.of_list  [ Intern.intern "Int", Env.Typed (`Opaque, `Type)
+    Ident.Map.of_alist_exn  [ Intern.intern "Int", Env.Typed (`Opaque, `Type)
     ; ( Intern.intern "+"
       , Env.Typed
           ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern  "y", fun y -> `App (`App (`Var (Intern.intern "+"), x), y)))
@@ -51,8 +52,8 @@ module WGSL : M = struct
 
   let execute = None
   let extension = "wgsl"
-  let map_types = Ident.Map.of_list @@ List.map (Tuple.both Intern.intern) [ "Int", "i32"; "UInt", "u32"; "Float", "f32" ]
-  let native_infix : Ident.t list = List.map Intern.intern [ "+"; "-"; "*"; "/" ]
+  let map_types = Ident.Map.of_alist_exn @@ List.map ~f:(Tuple.both Intern.intern) [ "Int", "i32"; "UInt", "u32"; "Float", "f32" ]
+  let native_infix : Ident.t list = List.map ~f:Intern.intern [ "+"; "-"; "*"; "/" ]
   let var = name
   let int = string_of_int
   let uint n = string_of_int n ^ "u"
@@ -65,15 +66,15 @@ module WGSL : M = struct
   ;;
 
   let record_literal type_name fields =
-    Printf.sprintf "%s(%s)" type_name (String.concat "," $ List.map snd fields)
+    Printf.sprintf "%s(%s)" type_name (String.concat ~sep:"," $ List.map ~f:snd fields)
   ;;
 
   let proj term field = Printf.sprintf "%s.%s" term (name field)
-  let emit = String.concat "\n"
+  let emit = String.concat ~sep:"\n"
 
   let fix_typenames : string -> string =
     let rec go ty =
-      match Ident.Map.find_opt (Intern.intern ty) map_types with
+      match Map.find map_types (Intern.intern ty) with
       | Some ty_ident -> go (Intern.lookup ty_ident)
       | None -> ty
     in
@@ -96,7 +97,7 @@ module WGSL : M = struct
       Printf.sprintf
         "%s<%s>"
         (compile_type t)
-        (String.concat ", " @@ List.map compile_type xs)
+        (String.concat ~sep:", " @@ List.map ~f:compile_type xs)
   ;;
 
   (* Add return to the innermost expression in a function body *)
@@ -107,12 +108,12 @@ module WGSL : M = struct
          (* WGSL doesn't support first-class functions, so we inline function bindings *)
          let inline_function_calls expr =
            let rec subst : Ir.t -> Ir.t = function
-             | Var name when name = ident -> value
-             | App (name, args) when name = ident ->
+             | Var var_name when Ident.equal var_name ident -> value
+             | App (app_name, args) when Ident.equal app_name ident ->
                (match value with
-                | Var fn_name -> App (fn_name, List.map subst args)
+                | Var fn_name -> App (fn_name, List.map ~f:subst args)
                 | _ -> failwith "Expected function name for inlining")
-             | App (fn_name, args) -> App (fn_name, List.map subst args)
+             | App (fn_name, args) -> App (fn_name, List.map ~f:subst args)
              | Let (id, ty, v, b) -> Let (id, ty, subst v, subst b)
              | If (c, t, f) -> If (subst c, subst t, subst f)
              | Proj (e, field) -> Proj (subst e, field)
@@ -132,7 +133,7 @@ module WGSL : M = struct
   (* Compile an expression to WGSL *)
   and compile_expr : Ir.t -> string = function
     | Var n -> var n
-    | App (f, x) -> app f (String.concat ", " @@ List.map compile_expr x)
+    | App (f, x) -> app f (String.concat ~sep:", " @@ List.map ~f:compile_expr x)
     | Infix (left, op, right) ->
       let left_expr = compile_expr left in
       let right_expr = compile_expr right in
@@ -142,12 +143,12 @@ module WGSL : M = struct
        | TFunction _ ->
          let inline_function_calls expr =
            let rec subst : Ir.t -> Ir.t = function
-             | Var name when name = ident -> value
-             | App (name, args) when name = ident ->
+             | Var name when Ident.equal name ident -> value
+             | App (name, args) when Ident.equal name ident ->
                (match value with
-                | Var fn_name -> App (fn_name, List.map subst args)
+                | Var fn_name -> App (fn_name, List.map ~f:subst args)
                 | _ -> failwith "Expected function name for inlining")
-             | App (fn_name, args) -> App (fn_name, List.map subst args)
+             | App (fn_name, args) -> App (fn_name, List.map ~f:subst args)
              | Let (id, ty, v, b) -> Let (id, ty, subst v, subst b)
              | If (c, t, f) -> If (subst c, subst t, subst f)
              | Proj (e, field) -> Proj (subst e, field)
@@ -177,7 +178,7 @@ module WGSL : M = struct
     | Lit (Record fields) ->
       (* Assume it's a struct - we'd need more context to know the type name *)
       let compiled_fields =
-        List.map (fun (field_name, expr) -> name field_name, compile_expr expr) fields
+        Map.to_alist  fields |> List.map ~f:(fun (k, v) -> name k, compile_expr v)
       in
       record_literal "UnknownStruct" compiled_fields
   ;;
@@ -187,8 +188,8 @@ module WGSL : M = struct
     | Function { ident; args; returns; body } ->
       let annotation (x, t) = Printf.sprintf "%s: %s" (name x) t in
       let args_str =
-        String.concat ", "
-        @@ List.map (Fun.compose annotation (Tuple.second compile_type)) args
+        String.concat ~sep:", "
+        @@ List.map ~f:(Fun.compose annotation (Tuple.second compile_type)) args
       in
       let returns = compile_type returns in
       let body = add_return_to_final_expr body in
@@ -197,9 +198,9 @@ module WGSL : M = struct
       Printf.sprintf "const %s: %s = %s;\n" (name ident) (compile_type ty) (compile_expr value)
     | RecordType { ident; params = _; fields } ->
       let fields_str =
-        String.concat ",\n  "
+        String.concat ~sep:",\n  "
         @@ List.map
-             (fun (field, ty) -> Printf.sprintf "%s: %s" (name field) (compile_type ty))
+             ~f:(fun (field, ty) -> Printf.sprintf "%s: %s" (name field) (compile_type ty))
              fields
       in
       Printf.sprintf "struct %s {\n  %s\n}\n" (name ident) fields_str
@@ -207,7 +208,7 @@ module WGSL : M = struct
 
   (* Main compilation entry point *)
   let compile (decls : Ir.declaration list) : string =
-    List.map compile_declaration decls |> emit |> Fun.flip String.cat "\n"
+    List.map ~f:compile_declaration decls |> emit |> String.append "\n"
   ;;
 end
 
@@ -215,7 +216,7 @@ module Javascript : M = struct
   let name = Intern.lookup
 
   let standard_library =
-    Ident.Map.of_list
+    Ident.Map.of_alist_exn
     [ Intern.intern "Int", Env.Typed (`Opaque, `Type)
     ; Intern.intern "Bool", Env.Typed (`Opaque, `Type)
     ; Intern.intern "Unit", Env.Typed (`Opaque, `Type)
@@ -269,7 +270,7 @@ module Javascript : M = struct
   let execute = Some "node"
   let extension = "js"
   let map_types = Ident.Map.empty
-  let native_infix = List.map Intern.intern [ "+"; "-"; "*"; "/"; "<" ]
+  let native_infix = List.map ~f:Intern.intern [ "+"; "-"; "*"; "/"; "<" ]
   let var = name
   let int = string_of_int
   let uint n = string_of_int n ^ "u"
@@ -280,15 +281,14 @@ module Javascript : M = struct
   let ternary scrut t f = Printf.sprintf "%s ? %s : %s" scrut t f
   (* We can always use ternaries in JavaScript *)
 
-  let record_literal fields =
+  let record_literal (fields : string Ident.Map.t) =
     Printf.sprintf
       "{\n%s\n}"
-      (String.concat ",\n  "
-       $ List.map (fun (id, expr) -> Printf.sprintf "%s: %s" (name id) expr) fields)
+      (Map.fold fields ~init:"" ~f:(fun ~key ~data acc -> acc ^ ",\n  " ^ Printf.sprintf "%s: %s" (Ident.Intern.lookup key) data))
   ;;
 
   let proj term field = Printf.sprintf "%s.%s" term (name field)
-  let emit = String.concat "\n"
+  let emit = String.concat ~sep:"\n"
 
   (* Add return to the innermost expression in a function body *)
   let rec add_return_to_final_expr : Ir.t -> string = function
@@ -298,7 +298,7 @@ module Javascript : M = struct
 
   and compile_expr : Ir.t -> string = function
     | Var n -> var n
-    | App (f, x) -> app f (String.concat ", " @@ List.map compile_expr x)
+    | App (f, x) -> app f (String.concat ~sep:", " @@ List.map ~f:compile_expr x)
     | Infix (left, op, right) ->
       let left_expr = compile_expr left in
       let right_expr = compile_expr right in
@@ -315,7 +315,7 @@ module Javascript : M = struct
     | Lit (Bool b) -> bool b
     | Lit (Record fields) ->
       let compiled_fields =
-        List.map (fun (field_name, expr) -> field_name, compile_expr expr) fields
+        Map.map ~f:compile_expr fields
       in
       record_literal compiled_fields
   ;;
@@ -323,7 +323,7 @@ module Javascript : M = struct
   (* Compile a top-level declaration *)
   let compile_declaration : Ir.declaration -> string = function
     | Function { ident; args; body; _ } ->
-      let args_str = String.concat ", " @@ List.map (fun (a, _) -> name a) args in
+      let args_str = String.concat ~sep:", " @@ List.map ~f:(Fun.compose Ident.Intern.lookup fst) args in
       let body = add_return_to_final_expr body in
       Printf.sprintf "const %s = (%s) => {\n  %s\n}" (name ident) args_str body
     | Constant { ident; value; _ } ->
@@ -333,10 +333,10 @@ module Javascript : M = struct
 
   (* Main compilation entry point *)
   let compile (decls : Ir.declaration list) : string =
-    List.map compile_declaration decls
+    List.map ~f:compile_declaration decls
     |> emit
-    |> String.cat "const print = x => console.log(x);\n\n"
-    |> Fun.flip String.cat "\n"
-    |> Fun.flip String.cat "\n\nconsole.log(main())"
+    |> String.append "const print = x => console.log(x);\n\n"
+    |> String.append "\n"
+    |> String.append "\n\nconsole.log(main())"
   ;;
 end

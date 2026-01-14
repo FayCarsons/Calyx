@@ -1,5 +1,5 @@
 module M = struct
-  type t = (int[@opaque])
+  type t = (int[@opaque]) [@@deriving show, sexp]
 
   let equal = Int.equal
   let compare = Int.compare

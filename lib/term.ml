@@ -1,3 +1,5 @@
+open Core
+
 type 'a base =
   [ `Var of Ident.t
   | `App of 'a * 'a
@@ -7,7 +9,7 @@ type 'a base =
   | `Lit of 'a literal
   | `Proj of 'a * Ident.t
   | `Match of 'a * ('a pattern * 'a) list
-  | `Err of Error.t
+  | `Err of CalyxError.t
   ]
 
 and 'a literal =
@@ -15,7 +17,12 @@ and 'a literal =
   | UInt of int
   | Float of float
   | Bool of bool
-  | Record of (Ident.t * 'a) list
+  | Record of 'a Ident.Map.t
+  [@printer
+    fun fmt m ->
+      Format.fprintf fmt "{";
+      Map.iteri m ~f:(fun ~key ~data:_ -> Format.fprintf fmt "%a " Ident.pp key);
+      Format.fprintf fmt "}"]
 
 and 'a pattern =
   | PVar of Ident.t
@@ -29,9 +36,10 @@ and 'a infix =
   ; op : 'a
   ; right : 'a
   }
+[@@deriving show, sexp]
 
 let over_literal (tf : 'a -> 'b) : 'a literal -> 'b literal = function
-  | Record fields -> Record (List.map (fun (l, f) -> l, tf f) fields)
+  | Record fields -> Record (Map.map ~f:tf fields)
   | Int n -> Int n
   | UInt n -> UInt n
   | Float x -> Float x
@@ -39,9 +47,9 @@ let over_literal (tf : 'a -> 'b) : 'a literal -> 'b literal = function
 ;;
 
 let rec over_pattern (tf : 'a -> 'b) : 'a pattern -> 'b pattern = function
-  | PCtor (ident, ps) -> PCtor (ident, List.map (over_pattern tf) ps)
+  | PCtor (ident, ps) -> PCtor (ident, List.map ~f:(over_pattern tf) ps)
   | PLit lit -> PLit (over_literal tf lit)
-  | PRec fields -> PRec (List.map (fun (l, f) -> l, over_pattern tf f) fields)
+  | PRec fields -> PRec (List.map ~f:(fun (l, f) -> l, over_pattern tf f) fields)
   | PVar x -> PVar x
   | PWild -> PWild
 ;;
@@ -60,7 +68,7 @@ let over_base (tf : 'a -> 'b) : 'a base -> 'b base = function
   | `Lit lit -> `Lit (over_literal tf lit)
   | `Proj (tm, f) -> `Proj (tf tm, f)
   | `Match (x, arms) ->
-    `Match (tf x, List.map (fun (cond, res) -> over_pattern tf cond, tf res) arms)
+    `Match (tf x, List.map ~f:(fun (cond, res) -> over_pattern tf cond, tf res) arms)
   | `Var x -> `Var x
   | `Type -> `Type
   | `Err e -> `Err e
@@ -77,11 +85,12 @@ type 'a term_binders =
   | `Pi of Ident.t * 'a * 'a
   | `Let of Ident.t * 'a option * 'a * 'a
   ]
+[@@deriving show, sexp]
 
 let over_term_binders (tf : 'a -> 'b) : 'a term_binders -> 'b term_binders = function
   | `Lam (x, body) -> `Lam (x, tf body)
   | `Pi (x, dom, cod) -> `Pi (x, tf dom, tf cod)
-  | `Let (x, ty, v, body) -> `Let (x, Option.map tf ty, tf v, tf body)
+  | `Let (x, ty, v, body) -> `Let (x, Option.map ~f:tf ty, tf v, tf body)
 ;;
 
 type cst =
@@ -90,6 +99,7 @@ type cst =
   | `Pos of Pos.t * cst
   | `If of cst * cst * cst
   ]
+[@@deriving show, sexp]
 
 type ast =
   [ ast base
@@ -97,6 +107,7 @@ type ast =
   | `Pos of Pos.t * ast
   | `Meta of Meta.t
   ]
+[@@deriving show, sexp]
 
 let rec desugar : cst -> ast = function
   | `Pos (pos, t) -> `Pos (pos, desugar t)
@@ -125,17 +136,26 @@ type value =
   | `Rec of value
   | `Opaque
   ]
+[@@deriving show, sexp]
 
 and row =
-  { fields : (Ident.t * value) list
+  { fields : value Ident.Map.t
+        [@printer
+          fun fmt m ->
+            Format.fprintf fmt "{";
+            Map.iteri m ~f:(fun ~key ~data ->
+              Format.fprintf fmt "%a: %a; " Ident.pp key pp_value data);
+            Format.fprintf fmt "}"]
   ; tail : value option
   }
+[@@deriving show, sexp]
 
 and neutral =
   | NVar of int * Ident.t
   | NApp of neutral * value
   | NProj of neutral * Ident.t
   | NMeta of Meta.t
+[@@deriving show, sexp]
 
 type 'a declaration =
   | Function of
@@ -153,8 +173,7 @@ type 'a declaration =
       ; params : (Ident.t * 'a) list
       ; fields : (Ident.t * 'a) list
       }
-
-and platform = Javascript
+[@@deriving show]
 
 let desugar_toplevel = function
   | Function { ident; typ; body } ->
@@ -167,8 +186,8 @@ let desugar_toplevel = function
     Constant { ident; typ; body }
   | RecordDecl { ident; params; fields } ->
     let open Util in
-    let params = List.map (Tuple.second desugar) params
-    and fields = List.map (Tuple.second desugar) fields in
+    let params = List.map ~f:(Tuple.second desugar) params
+    and fields = List.map ~f:(Tuple.second desugar) fields in
     RecordDecl { ident; params; fields }
 ;;
 

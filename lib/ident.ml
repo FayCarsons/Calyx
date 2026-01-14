@@ -1,12 +1,14 @@
+open Core
+
 module Ident = struct
-  type t = (int64[@opaque])
+  type t = (int64[@opaque]) [@@deriving sexp]
 
   let equal = Int64.equal
   let compare = Int64.compare
   let hash = Int64.hash
   let succ : t -> t = Int64.succ
   let ofInt : int -> t = Int64.of_int
-  let toInt : t -> int = Int64.to_int
+  let toInt : t -> int = Int64.to_int_exn
 end
 
 module Intern = struct
@@ -21,11 +23,11 @@ module Intern = struct
     }
 
   let _add : interner -> string -> Ident.t =
-    fun self s ->
+    fun self key ->
     let index = self.counter in
-    Table.add self.stringToIdent s index;
-    Vector.push self.identToString s;
-    Bloom.add self.bloomFilter s;
+    Hashtbl.add_exn self.stringToIdent ~key ~data:index;
+    Vector.push self.identToString key;
+    Bloom.add self.bloomFilter key;
     self.counter <- Ident.succ self.counter;
     assert (Ident.equal (Ident.ofInt @@ Vector.length self.identToString) self.counter);
     index
@@ -35,7 +37,7 @@ module Intern = struct
     fun self s ->
     if Bloom.member self.bloomFilter s
     then (
-      match Table.find_opt self.stringToIdent s with
+      match Hashtbl.find self.stringToIdent s with
       | Some ident -> ident
       | None -> _add self s)
     else _add self s
@@ -50,7 +52,7 @@ module Intern = struct
 
   let default () =
     { bloomFilter = Bloom.create ~size:8192 ~numHashes:3
-    ; stringToIdent = Table.create 1024
+    ; stringToIdent = Hashtbl.create ~growth_allowed:true ~size:1024 (module String)
     ; identToString = Vector.create ~capacity:1024 ()
     ; counter = 0L
     }
@@ -62,8 +64,27 @@ module Intern = struct
   let underscore = intern "_"
 end
 
-module Map = Map.Make (Ident)
+module Map = struct
+  include Map.Make (Ident)
+
+  let pp pp_val fmt m =
+    Format.fprintf fmt "{";
+    Core.Map.iteri m ~f:(fun ~key ~data ->
+      Format.fprintf fmt "%s: %a; " (Intern.lookup key) pp_val data);
+    Format.fprintf fmt "}"
+end
+
 include Ident
+
+let pp (fmt : Format.formatter) self = Format.fprintf fmt "%s" (Intern.lookup self)
+
+let sexp_of_t : t -> Sexplib.Sexp.t =
+  fun self -> Sexplib.Conv.sexp_of_string (Intern.lookup self)
+;;
+
+let t_of_sexp : Sexplib.Sexp.t -> t =
+  fun sexp -> Intern.intern (Sexplib.Conv.string_of_sexp sexp)
+;;
 
 let%test "intern then lookup returns original string" =
   let id = Intern.intern "hello" in

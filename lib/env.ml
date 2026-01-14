@@ -1,3 +1,4 @@
+open Core
 open Util
 
 type entry =
@@ -41,13 +42,13 @@ let local ~f thunk =
 
 let lookup ident =
   let env = ask () in
-  IdentMap.find_opt ident env.bindings
+  Map.find env.bindings ident
 ;;
 
 let lookup_value : Ident.t -> Term.value option = fun ident -> value <$> lookup ident
 
 let lookup_type : Ident.t -> Term.value option =
-  fun ident -> Option.bind (lookup ident) typ
+  fun ident -> Option.bind (lookup ident) ~f:typ
 ;;
 
 let pos () =
@@ -75,7 +76,7 @@ let with_binding
     | Some t -> Typed (value, t)
     | None -> Untyped value
   in
-  { env with bindings = IdentMap.add ident binding bindings }
+  { env with bindings = Map.set bindings ~key:ident ~data:binding }
 ;;
 
 let from_bindings bindings =

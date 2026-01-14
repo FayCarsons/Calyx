@@ -337,6 +337,6 @@ module Javascript : M = struct
     |> emit
     |> String.append "const print = x => console.log(x);\n\n"
     |> String.append "\n"
-    |> String.append "\n\nconsole.log(main())"
+    |> Fun.flip String.append "\n\nconsole.log(main())"
   ;;
 end

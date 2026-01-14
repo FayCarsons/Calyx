@@ -14,7 +14,7 @@ let over_literal (f : 'a -> 'b) : 'a Term.literal -> 'b Term.literal = function
 let rec eval : Term.ast -> Term.value = function
   | `Var name ->
     (match Env.lookup_value name with
-     | Some `Opaque -> `Neutral (NVar (Env.level (), name))
+     | Some `Opaque -> `Neutral (NVar (0, name))
      | Some other -> other
      | None -> failwith @@ Printf.sprintf "No variable '%s' in scope" (Intern.lookup name))
   | `Ann (e, _) -> eval e

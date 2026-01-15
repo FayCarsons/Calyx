@@ -9,8 +9,13 @@ module type StandardLibrary = sig
 end
 
 module type M = sig
+  (** Standard library functions for this backend. 
+      In the future we should be able to write these as S-expressions with access to compiler internals like 'Opaque' 
+  *)
   val standard_library : Env.entry Ident.Map.t
+  (** Type renaming, i.e. WGSL requires we rename 'Int' to 'i32' *)
   val map_types : Ident.t Ident.Map.t
+  (** Native infix functions, do not need to be renamed *)
   val native_infix : Ident.t list
   (** Command we can call to run generated code *)
   val execute : string option
@@ -33,8 +38,6 @@ module type Render = sig
 end
 
 module WGSL : M = struct
-  let name = Intern.lookup
-
   let standard_library =
     Ident.Map.of_alist_exn  [ Intern.intern "Int", Env.Typed (`Opaque, `Type)
     ; ( Intern.intern "+"
@@ -54,22 +57,22 @@ module WGSL : M = struct
   let extension = "wgsl"
   let map_types = Ident.Map.of_alist_exn @@ List.map ~f:(Tuple.both Intern.intern) [ "Int", "i32"; "UInt", "u32"; "Float", "f32" ]
   let native_infix : Ident.t list = List.map ~f:Intern.intern [ "+"; "-"; "*"; "/" ]
-  let var = name
+  let var = Intern.lookup
   let int = string_of_int
   let uint n = string_of_int n ^ "u"
   let float = string_of_float
   let bool = string_of_bool
-  let app f x = Printf.sprintf "%s(%s)" (name f) x
+  let app f x = Printf.sprintf "%s(%s)" (Intern.lookup f) x
 
   let let_ id ty value body =
-    Printf.sprintf "let %s : %s = %s;\n%s" (name id) ty value body
+    Printf.sprintf "let %s : %s = %s;\n%s" (Intern.lookup id) ty value body
   ;;
 
   let record_literal type_name fields =
     Printf.sprintf "%s(%s)" type_name (String.concat ~sep:"," @@ List.map ~f:snd fields)
   ;;
 
-  let proj term field = Printf.sprintf "%s.%s" term (name field)
+  let proj term field = Printf.sprintf "%s.%s" term (Intern.lookup field)
   let emit = String.concat ~sep:"\n"
 
   let fix_typenames : string -> string =
@@ -127,7 +130,7 @@ module WGSL : M = struct
          let wgsl_ty = compile_type ty in
          let compiled_value = compile_expr value in
          let compiled_body = add_return_to_final_expr body in
-         Printf.sprintf "let %s : %s = %s;\n%s" (name ident) wgsl_ty compiled_value compiled_body)
+         Printf.sprintf "let %s : %s = %s;\n%s" (Intern.lookup ident) wgsl_ty compiled_value compiled_body)
     | other -> Printf.sprintf "return %s;" (compile_expr other)
 
   (* Compile an expression to WGSL *)
@@ -137,7 +140,7 @@ module WGSL : M = struct
     | Infix (left, op, right) ->
       let left_expr = compile_expr left in
       let right_expr = compile_expr right in
-      Printf.sprintf "(%s %s %s)" left_expr (name op) right_expr
+      Printf.sprintf "(%s %s %s)" left_expr (Intern.lookup op) right_expr
     | Let (ident, ty_opt, value, body) ->
       (match ty_opt with
        | TFunction _ ->
@@ -178,7 +181,7 @@ module WGSL : M = struct
     | Lit (Record fields) ->
       (* Assume it's a struct - we'd need more context to know the type name *)
       let compiled_fields =
-        Map.to_alist  fields |> List.map ~f:(fun (k, v) -> name k, compile_expr v)
+        Map.to_alist  fields |> List.map ~f:(fun (k, v) -> Intern.lookup k, compile_expr v)
       in
       record_literal "UnknownStruct" compiled_fields
   ;;
@@ -186,24 +189,24 @@ module WGSL : M = struct
   (* Compile a top-level declaration *)
   let compile_declaration : Ir.declaration -> string = function
     | Function { ident; args; returns; body } ->
-      let annotation (x, t) = Printf.sprintf "%s: %s" (name x) t in
+      let annotation (x, t) = Printf.sprintf "%s: %s" (Intern.lookup x) t in
       let args_str =
         String.concat ~sep:", "
         @@ List.map ~f:(Fun.compose annotation (Tuple.second compile_type)) args
       in
       let returns = compile_type returns in
       let body = add_return_to_final_expr body in
-      Printf.sprintf "fn %s(%s) -> %s {\n  %s\n}" (name ident) args_str returns body
+      Printf.sprintf "fn %s(%s) -> %s {\n  %s\n}" (Intern.lookup ident) args_str returns body
     | Constant { ident; ty; value } ->
-      Printf.sprintf "const %s: %s = %s;\n" (name ident) (compile_type ty) (compile_expr value)
+      Printf.sprintf "const %s: %s = %s;\n" (Intern.lookup ident) (compile_type ty) (compile_expr value)
     | RecordType { ident; params = _; fields } ->
       let fields_str =
         Map.to_alist fields 
         |> List.map
-          ~f:(fun (field, ty) -> Printf.sprintf "%s: %s" (name field) (compile_type ty))
+          ~f:(fun (field, ty) -> Printf.sprintf "%s: %s" (Intern.lookup field) (compile_type ty))
         |> String.concat ~sep:",\n  "
       in
-      Printf.sprintf "struct %s {\n  %s\n}\n" (name ident) fields_str
+      Printf.sprintf "struct %s {\n  %s\n}\n" (Intern.lookup ident) fields_str
   ;;
 
   (* Main compilation entry point *)

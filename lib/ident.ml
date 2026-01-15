@@ -73,6 +73,17 @@ module Map = struct
       Format.fprintf fmt "%s: %a; " (Intern.lookup key) pp_val data);
     Format.fprintf fmt "}"
   ;;
+
+  let show show_val m =
+    Printf.sprintf
+      "{ %s }"
+      (Map.mapi
+         ~f:(fun ~key ~data ->
+           Printf.sprintf "%s = %s" (Intern.lookup key) (show_val data))
+         m
+       |> Map.data
+       |> String.concat ~sep:"\n  ")
+  ;;
 end
 
 include Ident

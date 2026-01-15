@@ -28,7 +28,11 @@ let rec eval : Term.ast -> Term.value = function
     in
     `Lam (x, body)
   | `App (f, x) -> app (eval f) (eval x)
-  | `Proj (term, field) -> proj field (eval term)
+  | `Infix { left; op; right } ->
+    let op_val = eval op
+    and left_val = eval left
+    and right_val = eval right in
+    app (app op_val left_val) right_val
   | `Let (ident, Some ty, value, body) ->
     let typ = eval ty
     and value = eval value in
@@ -42,13 +46,9 @@ let rec eval : Term.ast -> Term.value = function
   | `Lit lit -> `Lit (over_literal eval lit)
   | `Meta m -> `Neutral (NMeta m)
   | `Err e -> `Err e
-  | `Infix { left; op; right } ->
-    let op_val = eval op
-    and left_val = eval left
-    and right_val = eval right in
-    app (app op_val left_val) right_val
   | `RecordType { fields; tail } ->
     `RecordType { fields = Map.map ~f:eval fields; tail = Option.map tail ~f:eval }
+  | `Proj (term, field) -> proj field (eval term)
 
 and app f x =
   match f with
@@ -74,7 +74,7 @@ let rec quote (lvl : int) : Term.value -> Term.ast = function
   | `Neutral n -> quote_neutral lvl n
   | `Type -> `Type
   | `Pi (x, dom, cod) ->
-    (* level doesn't matter here because [var] is just used to access the body of [cod] *)
+    (* level shouldn't matter here because [var] is just used to access the body of [cod] *)
     let var = `Neutral (NVar (0, x)) in
     `Pi (x, quote lvl dom, quote (succ lvl) (cod var))
   | `Lam (x, b) ->
@@ -86,8 +86,7 @@ let rec quote (lvl : int) : Term.value -> Term.ast = function
     and tail = Option.map tail ~f:(quote lvl) in
     `RecordType { fields; tail }
   | `Err e -> `Err e
-  | `Opaque ->
-    failwith "Cannot quote opaque values - they should not appear in quotable contexts"
+  | `Opaque -> failwith "Cannot quote opaque values, they should not appear here"
   | #base as b -> (Term.map_base (quote lvl) b :> Term.ast)
 
 and quote_neutral (lvl : int) : neutral -> Term.ast = function
@@ -102,20 +101,17 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     (* print_endline "infer.Var"; *)
     let* ty = Env.lookup_type i |> Result.of_option ~error:(`NotFound i) in
     Ok (ty, `Ann (`Var i, quote 0 ty))
-  (* PI : (a : A) -> B *)
   | `Pi (x, dom, cod) ->
     (* print_endline "infer.Pi"; *)
     let* value = Result.map ~f:eval @@ check dom `Type in
     let* _ = Env.local ~f:(Env.with_binding x ~value) (fun () -> check cod `Type) in
     Ok (`Type, `Pi (x, dom, cod))
-  (* LAM : \x -> x *)
   | `Lam (x, body) ->
     (* print_endline "infer.Lam"; *)
     let dom = `Neutral (NMeta (Meta.fresh ())) in
     let* body_ty, body = Env.fresh_var x dom (fun _ -> infer body) in
     let ty = `Pi (x, dom, Fun.const body_ty) in
     Ok (ty, `Ann (`Lam (x, body), quote 0 ty))
-  (* APP : f x *)
   | `App (f, x) ->
     (* print_endline "infer.App"; *)
     let* tf, f = infer f in
@@ -132,7 +128,21 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     in
     let* x' = check x dom in
     Ok (cod, `Ann (`App (f, x'), quote 0 cod))
-  (* LET : let x : t in x *)
+  | `Infix { left; op; right } ->
+    (* print_endline "infer.Infix"; *)
+    (* Treat infix like nested application *)
+    let app_expr = `App (`App (op, left), right) in
+    let* ty, checked_app = infer app_expr in
+    (match checked_app with
+     | `Ann (`App (`App (op, left), right), result_ty) ->
+       let infix_expr = `Infix { left; op; right } in
+       Ok (ty, `Ann (infix_expr, result_ty))
+     | _ ->
+       (* This shouldn't happen *)
+       let* _, left = infer left in
+       let* _, op = infer op in
+       let* _, right = infer right in
+       Ok (ty, `Infix { left; op; right }))
   | `Let (ident, typ, value, body) ->
     (* print_endline "infer.Let"; *)
     let* typ =
@@ -149,23 +159,18 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
         (fun () -> infer body)
     in
     Ok (body_ty, `Ann (`Let (ident, Some (quote 0 typ), value', body), quote 0 body_ty))
-  (* ANN : (x : T) *)
   | `Ann (e, a) ->
     (* print_endline "infer.Ann"; *)
     let* _ = check a `Type in
     let vt = eval a in
     let* e = check e vt in
     Ok (vt, `Ann (e, a))
-  (* TYPE : Type *)
   | `Type ->
     (* print_endline "infer.Type"; *)
     Ok (`Type, `Type)
   | `Proj (term, field) ->
     (* print_endline "infer.Proj"; *)
-    let* te, e' = infer term in
-    let field_ty = `Neutral (NMeta (Meta.fresh ())) in
-    Solve.Constraints.(tell (te =. (field, field_ty)));
-    Ok (field_ty, `Ann (`Proj (e', field), quote 0 field_ty))
+    infer_proj term field
   | `Pos (p, term) ->
     (* print_endline "infer.Pos"; *)
     Env.local ~f:(Env.with_pos p) (fun () -> infer term)
@@ -180,7 +185,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     let annotated_arms = List.map ~f:fst arms_and_types in
     let arm_types = List.map ~f:snd arms_and_types in
     (match arm_types with
-     | [] -> Error (`Expected ("non-empty match", "empty match"))
+     | [] -> Error (`Expected ("non-empty match", Term.show_ast (`Match (scrut, arms))))
      | first_ty :: rest_types ->
        let unify_first ty = Solve.Constraints.(tell @@ Equals (first_ty, ty)) in
        List.iter ~f:unify_first rest_types;
@@ -199,21 +204,6 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
   | `Err e ->
     (* print_endline "infer.Err"; *)
     Ok (`Err e, `Err e)
-  | `Infix { left; op; right } ->
-    (* print_endline "infer.Infix"; *)
-    (* Treat infix like nested application *)
-    let app_expr = `App (`App (op, left), right) in
-    let* ty, checked_app = infer app_expr in
-    (match checked_app with
-     | `Ann (`App (`App (op', left'), right'), result_ty) ->
-       let infix_expr = `Infix { left = left'; op = op'; right = right' } in
-       Ok (ty, `Ann (infix_expr, result_ty))
-     | _ ->
-       (* This shouldn't happen *)
-       let* _, left' = infer left in
-       let* _, op' = infer op in
-       let* _, right' = infer right in
-       Ok (ty, `Infix { left = left'; op = op'; right = right' }))
   | `RecordType _ -> failwith "TODO"
 
 and infer_lit
@@ -223,7 +213,51 @@ and infer_lit
   | UInt n -> Ok (`Var (Intern.intern "UInt"), UInt n)
   | Float x -> Ok (`Var (Intern.intern "Float"), Float x)
   | Bool b -> Ok (`Var (Intern.intern "Bool"), Bool b)
-  | Record _structure -> failwith "TODO"
+  | Record fields ->
+    let* fields : (Ident.t * (Term.value * Term.ast)) list =
+      Map.to_alist fields
+      |> List.map ~f:(fun (field, data) ->
+        let* ty, value = infer data in
+        Ok (field, (ty, value)))
+      |> sequence
+    in
+    let field_values : (Ident.t * Term.ast) list = List.map ~f:(Tuple.second snd) fields
+    and field_types : (Ident.t * Term.value) list =
+      List.map ~f:(Tuple.second fst) fields
+    in
+    let record_type : Term.value =
+      let fields = Ident.Map.of_alist_exn field_types in
+      `RecordType { fields; tail = None }
+    in
+    let fields = Ident.Map.of_alist_exn field_values in
+    Ok (record_type, Record fields)
+
+(** Infer the type of [field] in [term] *)
+and infer_proj : Term.ast -> Ident.t -> (Term.value * Term.ast, CalyxError.t) result =
+  fun term field ->
+  let* typ, annotated = infer term in
+  match typ with
+  | `RecordType row ->
+    (match Map.find row.fields field with
+     | Some field_type -> Ok (field_type, `Proj (annotated, field))
+     | None ->
+       (match row.tail with
+        | Some tail ->
+          let field_type = `Neutral (NMeta (Meta.fresh ())) in
+          Solve.Constraints.(tell @@ has_field ~record:tail ~field_name:field ~field_type);
+          Ok (field_type, `Proj (annotated, field))
+        | None ->
+          Error (`NoField (field, Map.to_alist @@ Map.map ~f:Term.show_value row.fields))))
+  | `Neutral n ->
+    let field_type = `Neutral (NMeta (Meta.fresh ())) in
+    let partial : Term.value =
+      let fields = Ident.Map.singleton field field_type
+      and tail = Some (`Neutral (NMeta (Meta.fresh ()))) in
+      `RecordType { fields; tail }
+    in
+    Solve.Constraints.(tell @@ equals (`Neutral n) partial);
+    Ok (field_type, `Proj (annotated, field))
+  | other -> Error (`Expected ("Record", Term.show_value other))
 
 and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
   fun term expected ->

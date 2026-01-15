@@ -5,14 +5,16 @@ module Constraints = struct
     (* Type solving constraints *)
     type t =
       | Equals of Term.value * Term.value
-      | Subtype of Term.value * Term.value
       | HasField of Term.value * Ident.t * Term.value
+      | Subtype of
+          { sub : Term.value
+          ; super : Term.value
+          }
     [@@deriving show, sexp]
 
     let equals a b = Equals (a, b)
     let ( %= ) = equals
-    let subtype a b = Subtype (a, b)
-    let ( => ) = subtype
+    let subtype ~sub ~super = Subtype { sub; super }
 
     let has_field ~record ~field_name ~field_type =
       HasField (record, field_name, field_type)
@@ -89,6 +91,9 @@ let rec occurs (m : Meta.t) (v : value) : bool =
   | `Lam (_, body) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     occurs m (body var)
+  | `RecordType { fields; tail } ->
+    Map.exists ~f:(occurs m) fields
+    || Option.value ~default:false (Option.map tail ~f:(occurs m))
   | `Lit lit -> occurs_lit m lit
   | _ -> false
 
@@ -104,11 +109,11 @@ and occurs_lit m = function
 ;;
 
 let solve_meta (m : Meta.t) (v : value) : (unit, CalyxError.t) result =
-  match occurs m v with
-  | true -> Error (`Occurs m)
-  | false ->
+  if occurs m v
+  then Error (`Occurs m)
+  else (
     Solution.solve m v;
-    Ok ()
+    Ok ())
 ;;
 
 let ( let* ) = Result.Let_syntax.( >>= )
@@ -179,7 +184,61 @@ and unify_lit l r =
 and unify_record_literals
   : value Ident.Map.t -> value Ident.Map.t -> (unit, CalyxError.t) result
   =
-  fun _a _b -> failwith "TODO"
+  fun a b ->
+  if Set.equal (Map.key_set a) (Map.key_set b)
+  then (
+    let a' = Map.to_alist a
+    and b' = Map.to_alist b in
+    if List.for_all2_exn a' b' ~f:(fun (_, a) (_, b) -> Result.is_ok (unify a b))
+    then Ok ()
+    else
+      Error
+        (`Expected (Ident.Map.show Term.show_value a, Ident.Map.show Term.show_value b)))
+  else
+    Error (`Expected (Ident.Map.show Term.show_value a, Ident.Map.show Term.show_value b))
+
+and unify_record_types : value row -> value row -> (unit, CalyxError.t) result =
+  fun a b ->
+  let all_fields = Set.union (Map.key_set a.fields) (Map.key_set b.fields) in
+  let* _ =
+    Set.fold_result all_fields ~init:() ~f:(fun _ field ->
+      match Map.find a.fields field, Map.find b.fields field with
+      | Some a, Some b -> unify a b
+      | None, Some x ->
+        (match a.tail with
+         | Some tail ->
+           Constraints.(tell @@ has_field ~record:tail ~field_name:field ~field_type:x);
+           Ok ()
+         | None ->
+           Error
+             (`NoField
+                 ( field
+                 , List.map ~f:(Util.Tuple.second Term.show_value)
+                   @@ Map.to_alist a.fields )))
+      | Some x, None ->
+        (match b.tail with
+         | Some tail ->
+           Constraints.(tell @@ has_field ~record:tail ~field_name:field ~field_type:x);
+           Ok ()
+         | None ->
+           Error
+             (`NoField
+                 ( field
+                 , List.map ~f:(Util.Tuple.second Term.show_value)
+                   @@ Map.to_alist a.fields )))
+      | None, None -> (* Unreachable *) Ok ())
+  in
+  match a.tail, b.tail with
+  | None, None -> Ok ()
+  | Some a, Some b -> unify a b
+  | _ ->
+    Error
+      (`Expected
+          ( "two record types which are either both open, or both closed and equal"
+          , Printf.sprintf
+              "%s and %s"
+              (Term.show_row Term.pp_value a)
+              (Term.show_row Term.pp_value b) ))
 
 and vapp =
   fun f x ->
@@ -241,9 +300,9 @@ and solve_one = function
        (* print_endline "FAILED"; *)
        CalyxError.tell e;
        true)
-  | Subtype (_a, _b) ->
+  | Subtype { sub; super } ->
     (* Printf.printf "SOLVING SUBTYPE '%s' :> '%s'" (Term.show_value a) (Term.show_value b); *)
-    failwith "TODO"
+    subsumes ~sub ~super
   | HasField (record, field_name, field_type) ->
     solve_record ~record ~field_name ~field_type
 
@@ -261,4 +320,51 @@ and solve_record : record:value -> field_name:Ident.t -> field_type:value -> boo
   | _ ->
     CalyxError.tell @@ `Expected ("record", Term.show_value record);
     true
+
+and subsumes ~sub ~super =
+  let open Continue_or_stop in
+  match sub, super with
+  | `RecordType sub, `RecordType super ->
+    Map.fold_until super.fields ~init:true ~finish:Fun.id ~f:(fun ~key ~data _ ->
+      match Map.find sub.fields key with
+      | Some sub ->
+        Constraints.(tell @@ subtype ~sub ~super:data);
+        Continue true
+      | None ->
+        (match sub.tail with
+         | Some tail ->
+           Constraints.(tell @@ has_field ~record:tail ~field_name:key ~field_type:data);
+           Continue true
+         | None -> Stop false))
+    &&
+      (match sub.tail, super.tail with
+      | _, None -> true
+      | None, Some _ -> false
+      | Some sub, Some super ->
+        Constraints.(tell @@ subtype ~sub ~super);
+        true)
+  | _ ->
+    Constraints.(tell @@ equals sub super);
+    true
+;;
+
+let%test "'a is subtype of 'a" =
+  let open Ident in
+  let a : Term.value =
+    `RecordType
+      { fields =
+          Map.of_alist_exn
+            [ Intern.intern "x", `Var (Intern.intern "Int")
+            ; Intern.intern "y", `Var (Intern.intern "Int")
+            ]
+      ; tail =
+          Some
+            (`RecordType
+                { fields =
+                    Map.of_alist_exn [ Intern.intern "z", `Var (Intern.intern "Int") ]
+                ; tail = None
+                })
+      }
+  in
+  subsumes ~sub:a ~super:a
 ;;

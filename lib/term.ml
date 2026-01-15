@@ -103,13 +103,18 @@ and row_syntax =
   { fields : cst Ident.Map.t
   ; tail : record_tail
   }
+[@@deriving show, sexp]
 
 and record_tail =
+  (* Implicit tail `{ x : Float, y : Float }`*)
   | Implicit
+  (* Explicit tail `{ x : Float, y : Float | rest }` *)
   | Explicit of Ident.t
+  (* Explicitly closed `{ x : Float, y : Float !}` *)
   | ExplicitClosed
+[@@deriving show, sexp]
 
-let tail_opt = function
+let tail_opt : record_tail -> Ident.t option = function
   | Explicit ident -> Some ident
   | _ -> None
 ;;

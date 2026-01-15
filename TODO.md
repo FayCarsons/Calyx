@@ -13,6 +13,7 @@
       Produces `Equals (Var x) ?M` where `?M` is the meta representing the `{a}` in `f`.
   - In the future we should add implicit forms that do some accelerated search 
     through a prefix tree of typeclass instances, like `[S : Show a]`
+
 - [ ] Modularize backend 
   - There should be some module functor which takes a DSL mapping IR to string, 
     identifier replacement map, and standard library 

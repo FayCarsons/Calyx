@@ -47,6 +47,8 @@ let rec eval : Term.ast -> Term.value = function
     and left_val = eval left
     and right_val = eval right in
     app (app op_val left_val) right_val
+  | `RecordType { fields; tail } ->
+    `RecordType { fields = Map.map ~f:eval fields; tail = Option.map tail ~f:eval }
 
 and app f x =
   match f with
@@ -71,26 +73,22 @@ let rec quote (lvl : int) : Term.value -> Term.ast = function
   | `App (f, x) -> `App (quote lvl f, quote lvl x)
   | `Neutral n -> quote_neutral lvl n
   | `Type -> `Type
-  | `Pi (x, a, b) ->
+  | `Pi (x, dom, cod) ->
+    (* level doesn't matter here because [var] is just used to access the body of [cod] *)
     let var = `Neutral (NVar (0, x)) in
-    `Pi (x, quote lvl a, quote (succ lvl) (b var))
+    `Pi (x, quote lvl dom, quote (succ lvl) (cod var))
   | `Lam (x, b) ->
     let var = `Neutral (NVar (0, x)) in
     `Lam (x, quote (succ lvl) (b var))
   | `Lit lit -> `Lit (Term.over_literal (quote lvl) lit)
+  | `RecordType { fields; tail } ->
+    let fields = Map.map ~f:(quote lvl) fields
+    and tail = Option.map tail ~f:(quote lvl) in
+    `RecordType { fields; tail }
   | `Err e -> `Err e
-  | `Rec r -> quote lvl r
-  | `Row { fields; tail = None } ->
-    let fields = Map.map ~f:(quote lvl) fields in
-    `Lit (Record fields)
-  | `Row { fields; tail = Some (`Neutral (NMeta _)) } ->
-    let fields = Map.map ~f:(quote lvl) fields in
-    `Lit (Record fields)
   | `Opaque ->
     failwith "Cannot quote opaque values - they should not appear in quotable contexts"
   | #base as b -> (Term.map_base (quote lvl) b :> Term.ast)
-  | otherwise ->
-    failwith (Printf.sprintf "Cannot handle '%s'" @@ Term.show_value otherwise)
 
 and quote_neutral (lvl : int) : neutral -> Term.ast = function
   | NVar (_, x) -> `Var x
@@ -203,20 +201,20 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     Ok (`Err e, `Err e)
   | `Infix { left; op; right } ->
     (* print_endline "infer.Infix"; *)
-    (* Convert infix to nested application for type checking *)
+    (* Treat infix like nested application *)
     let app_expr = `App (`App (op, left), right) in
     let* ty, checked_app = infer app_expr in
-    (* Extract the typed sub-expressions and reconstruct infix *)
     (match checked_app with
      | `Ann (`App (`App (op', left'), right'), result_ty) ->
        let infix_expr = `Infix { left = left'; op = op'; right = right' } in
        Ok (ty, `Ann (infix_expr, result_ty))
      | _ ->
-       (* This shouldn't happen, but if it does, try to preserve structure *)
+       (* This shouldn't happen *)
        let* _, left' = infer left in
        let* _, op' = infer op in
        let* _, right' = infer right in
        Ok (ty, `Infix { left = left'; op = op'; right = right' }))
+  | `RecordType _ -> failwith "TODO"
 
 and infer_lit
   : Term.ast Term.literal -> (Term.value * Term.ast Term.literal, CalyxError.t) result

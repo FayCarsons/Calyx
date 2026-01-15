@@ -1,3 +1,4 @@
+(** Bloom filter for fast [member] ops in the string interner and subtyping *)
 type 'a filter
 
 external create : int -> int -> 'a filter = "caml_bloom_create"

@@ -22,7 +22,7 @@ let make_infix left op right =
 %token LPAREN RPAREN
 %token LBRACE RBRACE
 %token LBRACKET RBRACKET
-%token ARROW FAT_ARROW EQUALS COLON COMMA SEMICOLON PIPE BACKSLASH DOT
+%token ARROW FAT_ARROW EQUALS COLON COMMA SEMICOLON PIPE BACKSLASH DOT BANG
 %token EOF
 
 %start <Term.cst Term.declaration list> program
@@ -98,6 +98,20 @@ let type_expr :=
 let type_atom :=
   | x = IDENT; { make_var x }
   | LPAREN; ty = type_expr; RPAREN; { ty }
+  | LBRACE; fields = record_type_fields; tail = record_type_tail; RBRACE; {
+      `RecordType { fields; tail }
+    }
+
+let record_type_fields :=
+  | fields = separated_list(COMMA, record_type_field); { Ident.Map.of_alist_exn fields }
+
+let record_type_field :=
+  | name = IDENT; COLON; ty = type_expr; { (name, ty) }
+
+let record_type_tail :=
+  | { Implicit }
+  | PIPE; x = IDENT; { Explicit x }
+  | PIPE; BANG; { ExplicitClosed }
 
 let expr_top :=
   | e = expr; EOF; { e }
@@ -179,12 +193,14 @@ let expr_atom :=
   | b = BOOL; { `Lit (Bool b) }
   | x = IDENT; { make_var x }
   | LPAREN; e = expr; RPAREN; { e }
-  | LBRACE; fields = record_fields; RBRACE; { `Lit (Record fields) }
+  | LBRACE; fields = record_fields; RBRACE; {
+      `Lit (Record fields)
+    }
 
 let record_fields :=
   | fields = separated_list(COMMA, record_field); { Ident.Map.of_alist_exn fields }
 
 let record_field :=
-  | name = IDENT; EQUALS; value = expr; { 
-      (name, value) 
+  | name = IDENT; EQUALS; value = expr; {
+      (name, value)
     }

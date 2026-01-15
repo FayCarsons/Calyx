@@ -36,15 +36,7 @@ and zonk_value : Term.value -> Term.value = function
   | `Proj (tm, field) -> `Proj (zonk_value tm, field)
   | `Match (scrut, arms) ->
     `Match (zonk_value scrut, List.map ~f:(fun (p, e) -> p, zonk_value e) arms)
-  | `Row r -> `Row (zonk_row r)
-  | `Rec v -> `Rec (zonk_value v)
   | t -> t
-
-and zonk_row : Term.row -> Term.row =
-  fun row ->
-  { fields = Core.Map.map ~f:(fun v -> zonk_value v) row.fields
-  ; tail = Option.map row.tail ~f:zonk_value
-  }
 ;;
 
 let zonk_toplevel (m : Term.value Meta.gen) (ast : Term.ast Term.declaration)

@@ -1,5 +1,4 @@
 open Core
-open Util
 
 module Constraints = struct
   module M = struct
@@ -79,10 +78,6 @@ let rec force : value -> value = function
   | v -> v
 ;;
 
-let force_row (r : row) : row =
-  { fields = Map.map r.fields ~f:force; tail = Option.map r.tail ~f:force }
-;;
-
 let rec occurs (m : Meta.t) (v : value) : bool =
   match force v with
   | `Neutral (NMeta m') -> Meta.equal m m'
@@ -94,8 +89,6 @@ let rec occurs (m : Meta.t) (v : value) : bool =
   | `Lam (_, body) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     occurs m (body var)
-  | `Row r -> occurs_row m r
-  | `Rec r -> occurs m r
   | `Lit lit -> occurs_lit m lit
   | _ -> false
 
@@ -104,9 +97,6 @@ and occurs_neutral m = function
   | NApp (f, x) -> occurs_neutral m f || occurs m x
   | NProj (n, _) -> occurs_neutral m n
   | _ -> false
-
-and occurs_row m r =
-  Map.exists r.fields ~f:(fun v -> occurs m v) || is_some_and (occurs m) r.tail
 
 and occurs_lit m = function
   | Record fields -> Map.exists fields ~f:(occurs m)
@@ -183,52 +173,13 @@ and unify_lit l r =
   | (Int a, Int b | UInt a, UInt b) when Int.equal a b -> Ok ()
   | Float a, Float b when Float.equal a b -> Ok ()
   | Bool a, Bool b when Bool.equal a b -> Ok ()
-  | Record l, Record r ->
-    let sorted_l : (Ident.t * value) list =
-      List.sort ~compare:(fun a b -> Ident.compare (fst a) (fst b)) (Map.to_alist l)
-    and sorted_r : (Ident.t * value) list =
-      List.sort ~compare:(fun a b -> Ident.compare (fst a) (fst b)) (Map.to_alist r)
-    in
-    let fields_l = List.map ~f:fst sorted_l
-    and fields_r = List.map ~f:fst sorted_r in
-    if List.equal Ident.equal fields_l fields_r
-    then (
-      List.iter2_exn
-        ~f:(fun (_, v1) (_, v2) -> Constraints.(tell (v1 %= v2)))
-        sorted_l
-        sorted_r;
-      Ok ())
-    else Error (`UnificationFailure ("record fields mismatch", "record fields mismatch"))
+  | Record l, Record r -> unify_record_literals l r
   | _, _ -> Error `Todo
 
-and unify_rows : row -> row -> (unit, CalyxError.t) result =
-  fun l r ->
-  let l = force_row l
-  and r = force_row r in
-  let module M = Ident.Map in
-  let left_fields = l.fields
-  and right_fields = r.fields in
-  Map.iter2
-    ~f:(fun ~key:_ ~data ->
-      match data with
-      | `Both (v1, v2) -> Constraints.(tell (v1 %= v2))
-      | _ -> ())
-    left_fields
-    right_fields
-  |> ignore;
-  let only_left =
-    Map.filter_keys ~f:(fun k -> not (Map.mem right_fields k)) left_fields
-  in
-  let only_right =
-    Map.filter_keys ~f:(fun k -> not @@ Map.mem left_fields k) right_fields
-  in
-  let tail = Option.some @@ `Neutral (NMeta (Meta.fresh ())) in
-  Option.iter
-    ~f:(fun (l, r) ->
-      Constraints.(tell (l %= `Row { fields = only_left; tail }));
-      Constraints.(tell (r %= `Row { fields = only_right; tail })))
-    (Tuple.into <$> l.tail <*> r.tail);
-  Ok ()
+and unify_record_literals
+  : value Ident.Map.t -> value Ident.Map.t -> (unit, CalyxError.t) result
+  =
+  fun _a _b -> failwith "TODO"
 
 and vapp =
   fun f x ->
@@ -299,19 +250,11 @@ and solve_one = function
 and solve_record : record:value -> field_name:Ident.t -> field_type:value -> bool =
   fun ~record ~field_name ~field_type ->
   match force record with
-  | `Rec row_val ->
-    (match force row_val with
-     | `Row r ->
-       Option.iter
-         ~f:(Fun.compose Constraints.tell (Constraints.equals field_type))
-         (Map.find r.fields field_name);
-       true
-     | `Neutral (NMeta _) ->
-       Constraints.(tell @@ (record =. (field_name, field_type)));
-       false
-     | _ ->
-       CalyxError.tell @@ `Expected ("row", Term.show_value row_val);
-       true)
+  | `Lit (Record fields) ->
+    Option.iter
+      ~f:(Fun.compose Constraints.tell (Constraints.equals field_type))
+      (Map.find fields field_name);
+    true
   | `Neutral (NMeta _) ->
     Constraints.(tell @@ (record =. (field_name, field_type)));
     false

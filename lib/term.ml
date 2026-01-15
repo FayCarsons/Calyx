@@ -19,12 +19,12 @@ and 'a literal =
   | Float of float
   | Bool of bool
   | Record of 'a Ident.Map.t
-  [@printer
-    fun fmt m ->
-      Format.fprintf fmt "{";
-      Map.iteri m ~f:(fun ~key ~data:_ -> Format.fprintf fmt "%a " Ident.pp key);
-      Format.fprintf fmt "}"]
 [@@deriving show, sexp]
+
+and 'a row =
+  { fields : 'a Ident.Map.t
+  ; tail : 'a option
+  }
 
 and 'a pattern =
   | PVar of Ident.t
@@ -95,20 +95,44 @@ type cst =
   | cst term_binders
   | `Pos of Pos.t * cst
   | `If of cst * cst * cst
+  | `RecordType of row_syntax
   ]
 [@@deriving show, sexp]
+
+and row_syntax =
+  { fields : cst Ident.Map.t
+  ; tail : record_tail
+  }
+
+and record_tail =
+  | Implicit
+  | Explicit of Ident.t
+  | ExplicitClosed
+
+let tail_opt = function
+  | Explicit ident -> Some ident
+  | _ -> None
+;;
 
 type ast =
   [ ast base
   | ast term_binders
   | `Pos of Pos.t * ast
   | `Meta of Meta.t
+  | `RecordType of ast row
   ]
 [@@deriving show, sexp]
 
 let rec desugar : cst -> ast = function
   | `Pos (pos, t) -> `Pos (pos, desugar t)
   | `Infix inf -> `Infix (map_infix desugar inf)
+  | `RecordType { fields; tail = ExplicitClosed } ->
+    let fields = Map.map ~f:desugar fields in
+    `RecordType { fields; tail = None }
+  | `RecordType { fields; tail } ->
+    let fields = Map.map ~f:desugar fields in
+    let tail_ident = tail_opt tail |> Option.value ~default:(Ident.Intern.intern "a") in
+    `Pi (tail_ident, `Type, `RecordType { fields; tail = Some (`Var tail_ident) })
   | `If (cond, t, f) ->
     let cond = desugar cond
     and t = desugar t
@@ -125,26 +149,10 @@ type value =
   [ value base
   | `Lam of Ident.t * (value -> value)
   | `Pi of Ident.t * value * (value -> value)
+  | `RecordType of value row
   | `Neutral of neutral
-  | (* TODO: These suck, this was not the way to implement structural record types 
-      We should just have literals, which can exist in the type position 
-    *)
-    `Row of row
-  | `Rec of value
   | `Opaque
   ]
-[@@deriving show, sexp]
-
-and row =
-  { fields : value Ident.Map.t
-        [@printer
-          fun fmt m ->
-            Format.fprintf fmt "{";
-            Map.iteri m ~f:(fun ~key ~data ->
-              Format.fprintf fmt "%a: %a; " Ident.pp key pp_value data);
-            Format.fprintf fmt "}"]
-  ; tail : value option
-  }
 [@@deriving show, sexp]
 
 and neutral =

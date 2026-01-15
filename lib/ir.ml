@@ -232,7 +232,7 @@ and convert_literal : Term.ast Term.literal -> literal = function
   | Term.UInt n -> UInt n
   | Term.Float x -> Float x
   | Term.Bool b -> Bool b
-  | Term.Record fields -> Record (Core.Map.map ~f:convert_expr fields)
+  | Term.Record fields -> Record (Map.map ~f:convert_expr fields)
 
 (* Convert a Term.value type to IR type *)
 and convert_type : Term.ast -> ty = function

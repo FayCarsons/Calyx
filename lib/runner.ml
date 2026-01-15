@@ -36,10 +36,14 @@ let parse_program (input : string) : (Term.cst Term.declaration list, string) re
   | Lexer.Lexing_error msg -> Error msg
 ;;
 
+let mkdir path =
+  try Unix.mkdir path 0o755 with
+  | Unix.Unix_error (Unix.EEXIST, _, _) -> ()
+;;
+
 let output_to_file ~extension ~compiler_output : unit =
   let target_dir = ".calyx" in
-  (try Unix.mkdir target_dir 0o755 with
-   | Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+  mkdir target_dir;
   let output_path = Filename.concat target_dir (Printf.sprintf "out.%s" extension) in
   Core.Out_channel.write_all output_path ~data:compiler_output;
   Printf.printf "Output written to: %s\n" output_path

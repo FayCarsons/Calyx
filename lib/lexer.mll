@@ -98,14 +98,16 @@ and operator buf = parse
         match op with
         | ":" -> COLON
         | "=" -> EQUALS
+        | "!" -> BANG
         | _ -> OPERATOR (Intern.intern op)
       )
     }
-  | "" { 
+  | "" {
       let op = Buffer.contents buf in
       match op with
       | ":" -> COLON
       | "=" -> EQUALS
+      | "!" -> BANG
       | _ -> OPERATOR (Intern.intern op)
     }
 

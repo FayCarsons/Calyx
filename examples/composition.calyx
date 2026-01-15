@@ -1,0 +1,9 @@
+def compose (f : Int -> Int) (g : Int -> Int) (x : Int) -> Int do
+  f (g x)
+
+def double (n : Int) -> Int do n + n
+
+def succ (n : Int) -> Int do n + 1
+
+def main -> Int do
+  compose double succ 5

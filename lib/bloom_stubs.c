@@ -44,7 +44,12 @@ CAMLprim value caml_bloom_create(value vSize, value vNumHashes) {
     caml_failwith("BloomFilter_new: allocation failed");
   }
 
-  v = caml_alloc_custom(&bloomOps, sizeof(BloomFilter *), 0, 1);
+  // Calculate actual external memory usage for GC tracking
+  usize actual_size = nextPowerOfTwo(size);
+  usize mem_used =
+      sizeof(BloomFilter) + sizeof(BitVec) + (actual_size / 32) * sizeof(u32);
+
+  v = caml_alloc_custom_mem(&bloomOps, sizeof(BloomFilter *), mem_used);
   BloomFilter_val(v) = bf;
 
   CAMLreturn(v);

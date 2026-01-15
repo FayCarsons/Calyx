@@ -4,7 +4,7 @@
 #define BITS_PER_U32 32
 #define BITS_PER_U32_MASK (BITS_PER_U32 - 1)
 
-static inline usize nextPowerOfTwo(usize n) {
+usize nextPowerOfTwo(usize n) {
   if (n == 0)
     return 1;
 

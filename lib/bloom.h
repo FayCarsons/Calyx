@@ -7,6 +7,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+// Utility
+usize nextPowerOfTwo(usize n);
+
 // Bit vector
 typedef struct {
   u32 *mem;

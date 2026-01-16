@@ -1,9 +1,10 @@
-def compose (f : Int -> Int) (g : Int -> Int) (x : Int) -> Int do
-  f (g x)
+def compose (f : Int -> Int) (g : Int -> Int) -> (Int -> Int) do
+  \x -> f (g x)
 
 def double (n : Int) -> Int do n + n
 
 def succ (n : Int) -> Int do n + 1
 
 def main -> Int do
-  compose double succ 5
+  let doubleSucc = compose double succ in
+  doubleSucc 5

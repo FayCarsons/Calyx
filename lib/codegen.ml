@@ -96,6 +96,7 @@ module WGSL : M = struct
        | _ -> fix_typenames name)
     | Skolem -> Ir.Fresh.get "A"
     | TFunction { returns; _ } -> compile_type returns
+    | TRecord fields -> Printf.sprintf "struct R %s" (Ident.Map.show Ir.show_ty fields)
     | TApp (t, xs) ->
       Printf.sprintf
         "%s<%s>"
@@ -281,13 +282,17 @@ module Javascript : M = struct
   let bool = string_of_bool
   let app f x = Printf.sprintf "%s(%s)" (name f) x
   let let_ id value body = Printf.sprintf "const %s = %s;\n%s" (name id) value body
-  let ternary scrut t f = Printf.sprintf "%s ? %s : %s" scrut t f
+
   (* We can always use ternaries in JavaScript *)
+  let ternary scrut t f = Printf.sprintf "%s ? %s : %s" scrut t f
 
   let record_literal (fields : string Ident.Map.t) =
-    Printf.sprintf
-      "{\n%s\n}"
-      (Map.fold fields ~init:"" ~f:(fun ~key ~data acc -> acc ^ ",\n  " ^ Printf.sprintf "%s: %s" (Ident.Intern.lookup key) data))
+    Map.to_alist fields 
+    |> List.map ~f:(fun (ident, value) -> 
+      Printf.sprintf "%s: %s" (Intern.lookup ident) value
+    ) 
+    |> String.concat ~sep:",\n  "
+    |> Printf.sprintf "{  %s\n}"
   ;;
 
   let proj term field = Printf.sprintf "%s.%s" term (name field)

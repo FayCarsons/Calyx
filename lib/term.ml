@@ -137,7 +137,7 @@ let rec desugar : cst -> ast = function
   | `RecordType { fields; tail } ->
     let fields = Map.map ~f:desugar fields in
     let tail_ident = tail_opt tail |> Option.value ~default:(Ident.Intern.intern "a") in
-    `Pi (tail_ident, `Type, `RecordType { fields; tail = Some (`Var tail_ident) })
+    `RecordType { fields; tail = Some (`Var tail_ident) }
   | `If (cond, t, f) ->
     let cond = desugar cond
     and t = desugar t

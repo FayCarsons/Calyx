@@ -1,0 +1,6 @@
+def defaultFoo -> { x : Int, y : Int !} do 
+  { x = 0, y = 0 }
+
+def main -> Int do 
+  let foo = { x = 0, y = 0 } in 
+  foo.x

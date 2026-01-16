@@ -156,6 +156,7 @@ let rec unify : value -> value -> (unit, CalyxError.t) result =
             , Term.show_neutral (NVar (r_level, r_name)) ))
   | `Neutral l, `Neutral r -> unify_neutral l r
   | `Lit l, `Lit r -> unify_lit l r
+  | `RecordType a, `RecordType b -> unify_record_types a b
   | `Err _, _ | _, `Err _ -> Ok ()
   | a, b -> Error (`UnificationFailure (Term.show_value a, Term.show_value b))
 
@@ -343,6 +344,7 @@ and subsumes ~sub ~super =
       | Some sub, Some super ->
         Constraints.(tell @@ subtype ~sub ~super);
         true)
+  (* NOTE: This is awkward and I am very suspicious of it *)
   | _ ->
     Constraints.(tell @@ equals sub super);
     true
@@ -366,5 +368,5 @@ let%test "'a is subtype of 'a" =
                 })
       }
   in
-  subsumes ~sub:a ~super:a
+  fst @@ Constraints.handle (fun () -> subsumes ~sub:a ~super:a)
 ;;

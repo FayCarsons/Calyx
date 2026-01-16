@@ -16,7 +16,7 @@ let rec eval : Term.ast -> Term.value = function
     (match Env.lookup_value name with
      | Some `Opaque -> `Neutral (NVar (0, name))
      | Some other -> other
-     | None -> failwith @@ Printf.sprintf "No variable '%s' in scope" (Intern.lookup name))
+     | None -> `Neutral (NVar (0, name)))
   | `Ann (e, _) -> eval e
   | `Type -> `Type
   | `Pi (x, dom, cod) ->
@@ -209,10 +209,10 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
 and infer_lit
   : Term.ast Term.literal -> (Term.value * Term.ast Term.literal, CalyxError.t) result
   = function
-  | Int n -> Ok (`Var (Intern.intern "Int"), Int n)
-  | UInt n -> Ok (`Var (Intern.intern "UInt"), UInt n)
-  | Float x -> Ok (`Var (Intern.intern "Float"), Float x)
-  | Bool b -> Ok (`Var (Intern.intern "Bool"), Bool b)
+  | Int n -> Ok (`Neutral (NVar (0, Intern.intern "Int")), Int n)
+  | UInt n -> Ok (`Neutral (NVar (0, Intern.intern "UInt")), UInt n)
+  | Float x -> Ok (`Neutral (NVar (0, Intern.intern "Float")), Float x)
+  | Bool b -> Ok (`Neutral (NVar (0, Intern.intern "Bool")), Bool b)
   | Record fields ->
     let* fields : (Ident.t * (Term.value * Term.ast)) list =
       Map.to_alist fields

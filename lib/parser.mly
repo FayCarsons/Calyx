@@ -111,7 +111,7 @@ let record_type_field :=
 let record_type_tail :=
   | { Implicit }
   | PIPE; x = IDENT; { Explicit x }
-  | PIPE; BANG; { ExplicitClosed }
+  | BANG; { ExplicitClosed }
 
 let expr_top :=
   | e = expr; EOF; { e }

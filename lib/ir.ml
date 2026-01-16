@@ -36,6 +36,7 @@ type ty =
       ; returns : ty
       }
   | TApp of ty * ty list
+  | TRecord of ty Ident.Map.t
   | Skolem
 [@@deriving show, sexp]
 
@@ -126,6 +127,7 @@ module PrettyIR = struct
         (String.concat ~sep:", " @@ List.map ~f:ir_ty args)
         (ir_ty returns)
     | TApp (f, xs) -> String.concat ~sep:" " @@ (ir_ty f :: List.map ~f:ir_ty xs)
+    | TRecord fields -> Ident.Map.show show_ty fields
     | Skolem -> "<Skolem>"
 
   and ir_pattern : pattern -> string = fun _ -> ""
@@ -248,6 +250,22 @@ and convert_type : Term.ast -> ty = function
   | `App (f, x) ->
     (* For type applications like Maybe Int *)
     TApp (convert_type f, [ convert_type x ])
+  | `RecordType Term.{ fields; tail } ->
+    let open Term in
+    let rec go (fields : ast Ident.Map.t) : ast option -> ast Ident.Map.t = function
+      | Some (`RecordType { fields = fields'; tail }) ->
+        let fields : ast Ident.Map.t =
+          Map.merge fields fields' ~f:(fun ~key:_ data ->
+            match data with
+            | `Left v | `Right v | `Both (v, _) -> Some (v : ast))
+        in
+        go fields tail
+      | Some other ->
+        failwith @@ Printf.sprintf "Expected record tail, got %s" (Term.show_ast other)
+      | None -> fields
+    in
+    let fields : ty Ident.Map.t = Map.map ~f:convert_type @@ go fields tail in
+    TRecord fields
   | `Meta _ -> Skolem
   | `Ann (x, _) -> convert_type x
   | `Type -> TVar (Ident.Intern.intern "Type") (* Kind of types *)

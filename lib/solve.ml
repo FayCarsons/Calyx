@@ -48,12 +48,12 @@ module Solution = struct
               | Solve (meta, solution) ->
                 Some
                   (fun (k : (c, _) continuation) ->
-                    Meta.Solutions.add m.solutions meta (Some solution);
+                    Hashtbl.update m.solutions meta ~f:(Fun.const @@ Some solution);
                     continue k ())
               | Solution meta ->
                 Some
                   (fun (k : (c, _) continuation) ->
-                    let entry = Meta.Solutions.find m.solutions meta in
+                    let entry = Hashtbl.find m.solutions meta |> Option.join in
                     continue k entry)
               | eff ->
                 Some (fun (k : (c, _) continuation) -> continue k (Effect.perform eff)))
@@ -315,9 +315,36 @@ and solve_record : record:value -> field_name:Ident.t -> field_type:value -> boo
       ~f:(Fun.compose Constraints.tell (Constraints.equals field_type))
       (Map.find fields field_name);
     true
-  | `Neutral (NMeta _) ->
-    Constraints.(tell @@ (record =. (field_name, field_type)));
-    false
+  | `RecordType { fields; tail } ->
+    (match Map.find fields field_name with
+     | Some existing_type ->
+       Constraints.(tell @@ equals field_type existing_type);
+       true
+     | None ->
+       (match tail with
+        | Some tail_val ->
+          Constraints.(tell @@ has_field ~record:tail_val ~field_name ~field_type);
+          true
+        | None ->
+          CalyxError.(
+            tell
+            @@ `NoField
+                 ( field_name
+                 , List.map ~f:(Util.Tuple.second Term.show_value) @@ Map.to_alist fields
+                 );
+            true)))
+  | `Neutral (NMeta m) ->
+    (* Solve meta to a record type with this field and an open tail *)
+    let fresh_tail = `Neutral (NMeta (Meta.fresh ())) in
+    let record_type : Term.value =
+      `RecordType
+        { fields = Ident.Map.singleton field_name field_type; tail = Some fresh_tail }
+    in
+    (match solve_meta m record_type with
+     | Ok () -> true
+     | Error e ->
+       CalyxError.tell e;
+       true)
   | _ ->
     CalyxError.tell @@ `Expected ("record", Term.show_value record);
     true

@@ -1,7 +1,7 @@
 open Core
 
 module Ident = struct
-  type t = (int64[@opaque]) [@@deriving sexp]
+  type t = (int64[@opaque])
 
   let equal = Int64.equal
   let compare = Int64.compare
@@ -11,18 +11,22 @@ module Ident = struct
   let toInt : t -> int = Int64.to_int_exn
 end
 
-module Intern = struct
+module Intern : sig
+  val intern : string -> Ident.t
+  val lookup : Ident.t -> string
+  val underscore : Ident.t
+end = struct
   module Bloom = Bloom.String
   module Table = Hashtbl.Make (String)
 
-  type interner =
+  type t =
     { bloomFilter : Bloom.t
     ; stringToIdent : Ident.t Table.t
     ; identToString : string Vector.t
     ; mutable counter : Ident.t
     }
 
-  let _add : interner -> string -> Ident.t =
+  let add' : t -> string -> Ident.t =
     fun self key ->
     let index = self.counter in
     Hashtbl.add_exn self.stringToIdent ~key ~data:index;
@@ -33,17 +37,17 @@ module Intern = struct
     index
   ;;
 
-  let _intern : interner -> string -> Ident.t =
+  let intern' : t -> string -> Ident.t =
     fun self s ->
     if Bloom.member self.bloomFilter s
     then (
       match Hashtbl.find self.stringToIdent s with
       | Some ident -> ident
-      | None -> _add self s)
-    else _add self s
+      | None -> add' self s)
+    else add' self s
   ;;
 
-  let _lookup : interner -> Ident.t -> string =
+  let lookup' : t -> Ident.t -> string =
     fun self index ->
     match Vector.get self.identToString @@ Ident.toInt index with
     | Some s -> s
@@ -59,13 +63,30 @@ module Intern = struct
   ;;
 
   let _global = default ()
-  let intern : string -> Ident.t = _intern _global
-  let lookup : Ident.t -> string = _lookup _global
+  let intern : string -> Ident.t = intern' _global
+  let lookup : Ident.t -> string = lookup' _global
   let underscore = intern "_"
 end
 
+include Ident
+
+let pp (fmt : Format.formatter) self = Format.fprintf fmt "%s" (Intern.lookup self)
+
+let sexp_of_t : t -> Sexplib.Sexp.t =
+  fun self -> Sexplib.Conv.sexp_of_string (Intern.lookup self)
+;;
+
+let t_of_sexp : Sexplib.Sexp.t -> t =
+  fun sexp -> Intern.intern (Sexplib.Conv.string_of_sexp sexp)
+;;
+
 module Map = struct
-  include Map.Make (Ident)
+  include Map.Make (struct
+      include Ident
+
+      let sexp_of_t = sexp_of_t
+      let t_of_sexp = t_of_sexp
+    end)
 
   let pp pp_val fmt m =
     Format.fprintf fmt "{";
@@ -85,18 +106,6 @@ module Map = struct
        |> String.concat ~sep:"\n  ")
   ;;
 end
-
-include Ident
-
-let pp (fmt : Format.formatter) self = Format.fprintf fmt "%s" (Intern.lookup self)
-
-let sexp_of_t : t -> Sexplib.Sexp.t =
-  fun self -> Sexplib.Conv.sexp_of_string (Intern.lookup self)
-;;
-
-let t_of_sexp : Sexplib.Sexp.t -> t =
-  fun sexp -> Intern.intern (Sexplib.Conv.string_of_sexp sexp)
-;;
 
 let%test "intern then lookup returns original string" =
   let id = Intern.intern "hello" in

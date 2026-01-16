@@ -23,8 +23,9 @@ and 'a literal =
 
 and 'a row =
   { fields : 'a Ident.Map.t
-  ; tail : 'a option
+  ; tail : 'a option [@sexp.option]
   }
+[@@deriving show, sexp]
 
 and 'a pattern =
   | PVar of Ident.t

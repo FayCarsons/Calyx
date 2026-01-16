@@ -17,7 +17,11 @@ let rec zonk : Term.ast -> Term.ast = function
   | `Pos (p, tm) -> `Pos (p, zonk tm)
   | `Infix { left; op; right } ->
     `Infix { left = zonk left; op = zonk op; right = zonk right }
-  | t -> t
+  | `RecordType { fields; tail } ->
+    let fields = Map.map fields ~f:zonk
+    and tail = Option.map tail ~f:zonk in
+    `RecordType { fields; tail }
+  | term -> term
 
 (* I can't eta reduce this?? OCaml... *)
 and zonk_lit : Term.ast Term.literal -> Term.ast Term.literal =
@@ -36,6 +40,21 @@ and zonk_value : Term.value -> Term.value = function
   | `Proj (tm, field) -> `Proj (zonk_value tm, field)
   | `Match (scrut, arms) ->
     `Match (zonk_value scrut, List.map ~f:(fun (p, e) -> p, zonk_value e) arms)
+  | `RecordType { fields; tail } ->
+    let fields = Map.map fields ~f:zonk_value in
+    let tail =
+      match Option.map tail ~f:zonk_value with
+      (* Unsolved row variable - close the record *)
+      | Some (`Neutral (NMeta _)) -> None
+      (* Solved to another record type - flatten/merge *)
+      | Some (`RecordType inner) ->
+        let fields =
+          Map.merge_skewed fields inner.fields ~combine:(fun ~key:_ _ v -> v)
+        in
+        Some (`RecordType { fields; tail = inner.tail } : Term.value)
+      | other -> other
+    in
+    `RecordType { fields; tail }
   | t -> t
 ;;
 

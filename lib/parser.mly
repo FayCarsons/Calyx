@@ -37,7 +37,7 @@ let program :=
 
 let declaration :=
   | def_decl
-  | let_decl  
+  | const_decl  
   | data_decl
 
 let def_decl :=
@@ -60,18 +60,16 @@ let def_decl :=
       Function { ident; typ; body = body_with_params }
     }
 
-let let_decl := 
-  | LET; ident = IDENT; ty = option(preceded(COLON, type_expr)); 
+let const_decl := 
+  | CONST; ident = IDENT; typ = preceded(COLON, type_expr); 
     EQUALS; body = expr; {
-      let typ = Option.value ~default:`Type ty in
       Constant { ident; typ; body }
     }
 
 let data_decl :=
-  | DATA; ident = IDENT; params = list(type_param); WHERE; 
-    fields = list(constructor); option(END); {
+  | DATA; ident = IDENT; params = type_param*; WHERE; 
+    fields = record_type_fields; {
       let params = Ident.Map.of_alist_exn params in
-      let fields = Ident.Map.of_alist_exn fields in
       RecordDecl { ident; params; fields }
     }
 

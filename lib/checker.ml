@@ -345,8 +345,14 @@ let infer_toplevel
       Env.local ~f:(Env.with_binding ident ~typ ~value) (fun () ->
         let typ = quote 0 typ in
         Result.map ~f:(List.cons (Constant { ident; typ; body })) @@ go rest)
-      (* TODO: Handle records *)
-    | RecordDecl _ :: rest -> go rest
+    | RecordDecl { ident; params = _; fields } :: rest ->
+      (* Evaluate field types and construct the record type *)
+      let field_types = Map.map fields ~f:eval in
+      let record_type : Term.value = `RecordType { fields = field_types; tail = None } in
+      (* Bind the record type name to the record type value *)
+      Env.local ~f:(Env.with_binding ident ~value:record_type ~typ:`Type) (fun () ->
+        Result.map ~f:(List.cons (RecordDecl { ident; params = Ident.Map.empty; fields }))
+        @@ go rest)
     | [] -> Ok []
   in
   let result, gen =

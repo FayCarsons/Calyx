@@ -25,7 +25,7 @@ let compile backend path =
     Option.iter Backend.execute ~f:(Runner.execute (module Backend))
   | Error es ->
     Printf.printf
-      "Failed to compile:\n%s"
+      "Failed to compile:\n%s\n"
       (String.concat ~sep:"\n" @@ List.map ~f:CalyxError.show es)
 ;;
 

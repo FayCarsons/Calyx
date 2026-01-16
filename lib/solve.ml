@@ -270,7 +270,7 @@ let pretty_solver_error = function
   | Errors es ->
     Printf.sprintf
       "Failed to solve due to errors:\n%s\n"
-      (String.concat ~sep:", " @@ List.map ~f:CalyxError.show es)
+      (String.concat ~sep:",\n" @@ List.map ~f:CalyxError.show es)
 ;;
 
 let rec solve (initial : Constraints.t list) : (unit, solver_error) result =

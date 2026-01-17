@@ -355,6 +355,9 @@ let infer_toplevel
       Env.local ~f:(Env.with_binding ident ~value:record_type ~typ:`Type) (fun () ->
         Result.map ~f:(List.cons (RecordDecl { ident; params = Ident.Map.empty; fields }))
         @@ go rest)
+    | SumDecl _ :: rest ->
+      print_endline "Sum types not implemented";
+      go rest
     | [] -> Ok []
   in
   let result, gen =

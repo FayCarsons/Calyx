@@ -198,6 +198,11 @@ type 'a declaration =
       ; params : 'a Ident.Map.t
       ; fields : 'a Ident.Map.t
       }
+  | SumDecl of
+      { ident : Ident.t
+      ; params : 'a Ident.Map.t
+      ; constructors : 'a list Ident.Map.t
+      }
 [@@deriving show, sexp]
 
 let desugar_toplevel = function
@@ -210,7 +215,11 @@ let desugar_toplevel = function
     and body = desugar body in
     Constant { ident; typ; body }
   | RecordDecl { ident; params; fields } ->
-    let params = Map.map ~f:desugar params
-    and fields = Map.map ~f:desugar fields in
+    let params = Map.map params ~f:desugar
+    and fields = Map.map fields ~f:desugar in
     RecordDecl { ident; params; fields }
+  | SumDecl { ident; params; constructors } ->
+    let params = Map.map params ~f:desugar
+    and constructors = Map.map constructors ~f:(List.map ~f:desugar) in
+    SumDecl { ident; params; constructors }
 ;;

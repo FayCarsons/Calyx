@@ -334,6 +334,7 @@ let convert : Term.ast Term.declaration list -> declaration list =
       let params = Map.map ~f:convert_type params
       and fields = Map.map ~f:convert_type fields in
       RecordType { ident; params; fields }
+    | Term.SumDecl _ -> failwith "Sum types not implemented in 'ir.ml'"
   in
   let x, xs = Context.handle (fun () -> Fresh.handle (fun () -> List.map ~f:go decls)) in
   List.append x xs

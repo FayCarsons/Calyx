@@ -24,7 +24,7 @@ module.exports = grammar({
 
     constant_def: $ => seq(
       'const',
-      field('name', $.identifier),
+      field('name', $.type_identifier),
       ':',
       field('type', $._type),
       '=',
@@ -34,32 +34,70 @@ module.exports = grammar({
     data_def: $ => seq(
       'data',
       field('name', $.type_identifier),
-      repeat($.type_param),
+      repeat($._data_param),
       'where',
-      $.record_fields,
+      choice($.record_fields, repeat1($.constructor)),
+    ),
+
+    _data_param: $ => choice(
+      $.type_param,
+      $.implicit_type_param,
     ),
 
     type_param: $ => seq('(', $.identifier, ':', $._type, ')'),
+    implicit_type_param: $ => seq('{', $.identifier, '}'),
+
+    constructor: $ => seq(
+      '|',
+      field('name', $.type_identifier),
+      repeat($._type_atom),
+    ),
 
     _params: $ => choice(
       $.unit,
       repeat1($.param),
     ),
 
-    param: $ => seq('(', $.identifier, ':', $._type, ')'),
+    param: $ => choice($.explicit_param, $.implicit_param),
+
+    explicit_param: $ => seq('(', $.binders, ')'),
+    implicit_param: $ => seq('{', $.binders, '}'),
+
+    binders: $ => seq(
+      $.identifier,
+      repeat(seq(',', $.identifier)),
+      optional(seq(':', $._type)),
+    ),
 
     unit: $ => '()',
 
     // Types
     _type: $ => choice(
+      $.function_type,
+      $.implicit_function_type,
+      $._type_app,
+    ),
+
+    _type_app: $ => choice(
+      $.type_application,
+      $._type_atom,
+    ),
+
+    type_application: $ => prec.left(2, seq($._type_app, $._type_atom)),
+
+    _type_atom: $ => choice(
       $.type_identifier,
       $.identifier,
-      $.function_type,
+      'Type',
       $.record_type,
       seq('(', $._type, ')'),
     ),
 
-    function_type: $ => prec.right(1, seq($._type, '->', $._type)),
+    function_type: $ => prec.right(1, seq($._type_app, '->', $._type)),
+
+    implicit_function_type: $ => prec.right(1, seq(
+      '{', $.identifier, optional(seq(':', $._type)), '}', '->', $._type
+    )),
 
     record_type: $ => seq(
       '{',
@@ -110,16 +148,27 @@ module.exports = grammar({
       'end',
     ),
 
-    match_expr: $ => prec.right(seq(
+    match_expr: $ => seq(
       'match', $._expr, 'with',
       repeat1($.match_arm),
-      optional('end'),
-    )),
+      'end',
+    ),
 
     match_arm: $ => seq(optional('|'), $.pattern, '->', $._expr),
 
     pattern: $ => choice(
+      $.constructor_pattern,
+      $._pattern_atom,
+    ),
+
+    constructor_pattern: $ => prec.left(seq(
+      $.type_identifier,
+      repeat1($._pattern_atom),
+    )),
+
+    _pattern_atom: $ => choice(
       $.identifier,
+      $.type_identifier,
       $.integer,
       $.boolean,
       seq('(', $.pattern, ')'),
@@ -155,6 +204,7 @@ module.exports = grammar({
       $.float,
       $.boolean,
       $.record_literal,
+      $.list_literal,
       seq('(', $._expr, ')'),
     ),
 
@@ -168,6 +218,14 @@ module.exports = grammar({
 
     record_field_value: $ => seq($.identifier, '=', $._expr),
 
+    list_literal: $ => seq('[', optional($.list_elements), ']'),
+
+    list_elements: $ => seq(
+      $._expr,
+      repeat(seq(',', $._expr)),
+      optional(','),
+    ),
+
     // Terminals
     identifier: $ => /[a-z_][a-zA-Z0-9_']*/,
     type_identifier: $ => /[A-Z][a-zA-Z0-9_']*/,
@@ -175,6 +233,6 @@ module.exports = grammar({
     float: $ => /-?[0-9]+\.[0-9]*([eE][+-]?[0-9]+)?/,
     boolean: $ => choice('True', 'False'),
     operator: $ => /[+\-*/<>=!&|^%~?@$:]+/,
-    comment: $ => seq('//', /.*/),
+    comment: $ => seq('--', /.*/),
   },
 });

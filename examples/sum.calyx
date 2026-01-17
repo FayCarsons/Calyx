@@ -1,0 +1,12 @@
+data Option (a : Type) where
+| Some a
+| None
+
+def map {a, b} (self : Option a) (f : a -> b) -> Option b do 
+  match self with
+  | Some x -> Some (f x)
+  | None -> None
+  end
+
+def main () -> Int do 
+  map (Some 42) succ

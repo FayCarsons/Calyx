@@ -33,21 +33,24 @@
 ; Types
 (type_identifier) @type
 (record_type) @type
+"Type" @type.builtin
 
 ; Functions
 (function_def name: (identifier) @function)
 (application) @function.call
 
 ; Variables and parameters
-(param (identifier) @variable.parameter)
+(binders (identifier) @variable.parameter)
 (let_expr name: (identifier) @variable)
+(pattern (identifier) @variable)
+(constructor_pattern (identifier) @variable)
 (identifier) @variable
 
 ; Comments
 (comment) @comment
 
 ; Punctuation
-["(" ")" "{" "}"] @punctuation.bracket
+["(" ")" "{" "}" "[" "]"] @punctuation.bracket
 "," @punctuation.delimiter
 
 ; Lambda

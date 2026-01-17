@@ -45,12 +45,12 @@ let def_decl :=
     let rec build_lam params body =
       match params with
       | [] -> body
-      | (x, _) :: rest -> `Lam (x, build_lam rest body)
+      | (_, x, _) :: rest -> `Lam (x, build_lam rest body)
     in
     let rec build_type params ret =
       match params with
       | [] -> ret
-      | (ident, dom) :: rest -> `Pi {plicity = Explicit; ident; dom; cod = build_type rest ret}
+      | (plicity, ident, dom) :: rest -> `Pi {plicity; ident; dom; cod = build_type rest ret}
     in
     let body = build_lam params body in
     let typ = build_type params ret in
@@ -64,37 +64,58 @@ let const_decl :=
     }
 
 let data_decl :=
-  | DATA; ident = IDENT; params = type_param*; WHERE; 
-    fields = record_type_fields; {
-      let params = Ident.Map.of_alist_exn params in
-      RecordDecl { ident; params; fields }
-    }
+  | DATA; ident = IDENT; params = type_param*; WHERE; fields = record_type_fields; {
+    let params = Ident.Map.of_alist_exn params in
+    RecordDecl { ident; params; fields }
+  }
+  | DATA; ident = IDENT; params = type_param*; WHERE; constructors = constructor+; {
+    let constructors = Ident.Map.of_alist_exn constructors
+    and params = Ident.Map.of_alist_exn params in
+    SumDecl { ident; params; constructors }
+  }
 
 let type_param :=
   | LPAREN; x = IDENT; COLON; ty = type_expr; RPAREN; { (x, ty) }
 
 let constructor :=
-  | option(PIPE); name = IDENT; COLON; ty = type_expr; { (name, ty) }
+  | PIPE; name = IDENT; tys = type_atom*; { (name, tys) }
 
 let params :=
-  | ps = param+; { ps }
-  | UNIT; { [Ident.Intern.underscore, `Var (Ident.Intern.intern "Unit")] }
+  | ps = param+; { List.concat ps }
+  | UNIT; { [Explicit, Ident.Intern.underscore, `Var (Ident.Intern.intern "Unit")] }
 
 let param :=
-  | LPAREN; x = IDENT; COLON; ty = type_expr; RPAREN; { (x, ty) }
+  | LPAREN; bs = binders; RPAREN; { List.map (fun (x, ty) -> Explicit, x, ty) bs }
+  | LBRACE; bs = binders; RBRACE; { List.map (fun (x, ty) -> Implicit, x, ty) bs }
+
+let binders :=
+  | x = IDENT; COLON; ty = type_expr; { [(x, ty)] }
+  | x = IDENT; COMMA; rest = binders; { (x, snd (List.hd rest)) :: rest }
+  | x = IDENT; { [(x, `Type)] }
 
 (* Type expressions *)
 let type_expr :=
-  | t = type_atom; { t }
-  | dom = type_atom; ARROW; cod = type_expr; { 
-      `Pi { plicity = Explicit; ident = Ident.Intern.underscore; dom; cod } 
+  | type_app
+  | dom = type_app; ARROW; cod = type_expr; {
+      `Pi { plicity = Explicit; ident = Ident.Intern.underscore; dom; cod }
     }
   | LPAREN; ident = IDENT; COLON; dom = type_expr; RPAREN; ARROW; cod = type_expr; {
       `Pi {plicity = Explicit; ident; dom; cod}
     }
+  | LBRACE; ident = IDENT; COLON; dom = type_expr; RBRACE; ARROW; cod = type_expr; {
+      `Pi {plicity = Implicit; ident; dom; cod}
+    }
+  | LBRACE; ident = IDENT; RBRACE; ARROW; cod = type_expr; {
+      `Pi {plicity = Implicit; ident; dom = `Type; cod}
+    }
+
+let type_app :=
+  | type_atom
+  | f = type_app; arg = type_atom; { `App (f, arg) }
 
 let type_atom :=
   | x = IDENT; { make_var x }
+  | TYPE; { `Type }
   | LPAREN; ty = type_expr; RPAREN; { ty }
   | LBRACE; fields = record_type_fields; tail = record_type_tail; RBRACE; {
       `RecordType { fields; tail }
@@ -134,7 +155,7 @@ let expr_if :=
     }
 
 let expr_match :=
-  | MATCH; e = expr; WITH; arms = match_arms; option(END); {
+  | MATCH; e = expr; WITH; arms = match_arms; END; {
       `Match (e, arms)
     }
 
@@ -145,7 +166,7 @@ let match_arm :=
   | p = pattern; ARROW; e = expr; { (p, e) }
 
 let pattern :=
-  | x = IDENT; ps = nonempty_list(pattern_atom); { 
+  | x = IDENT; ps = pattern_atom+; { 
       PCtor (x, ps) 
     }
   | p = pattern_atom; { p }

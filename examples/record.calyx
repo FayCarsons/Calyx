@@ -4,6 +4,6 @@ data Foo where
 
 const defaultFoo : Foo = { x = 60, y = 7 }
 
-def main -> Int do 
-  let foo = defaultFoo in 
+def main () -> Int do 
+  let foo : Foo = { x = 1, y = 66 } in 
   foo.x + foo.y

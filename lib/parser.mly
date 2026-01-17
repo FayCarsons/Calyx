@@ -19,7 +19,7 @@ let make_infix left op right =
 %token TYPE DATA WHERE CONST
 
 /* Delimiters */
-%token LPAREN RPAREN
+%token LPAREN RPAREN UNIT
 %token LBRACE RBRACE
 %token LBRACKET RBRACKET
 %token ARROW FAT_ARROW EQUALS COLON COMMA SEMICOLON PIPE BACKSLASH DOT BANG
@@ -41,24 +41,21 @@ let declaration :=
   | data_decl
 
 let def_decl :=
-  | DEF; ident = IDENT; params = list(param); 
-    ret = option(preceded(ARROW, type_expr)); 
-    DO; body = expr; option(END); {
-      let rec build_lam params body =
-        match params with
-        | [] -> body
-        | (x, _) :: rest -> `Lam (x, build_lam rest body)
-      in
-      let rec build_type params ret =
-        match params with
-        | [] -> Option.value ~default:`Type ret
-        | (x, ty) :: rest ->
-            `Pi (x, ty, build_type rest ret)
-      in
-      let body_with_params = build_lam params body in
-      let typ = build_type params ret in
-      Function { ident; typ; body = body_with_params }
-    }
+  DEF; ident = IDENT; params = params; ARROW; ret = type_expr; DO; body = expr; {
+    let rec build_lam params body =
+      match params with
+      | [] -> body
+      | (x, _) :: rest -> `Lam (x, build_lam rest body)
+    in
+    let rec build_type params ret =
+      match params with
+      | [] -> ret
+      | (ident, dom) :: rest -> `Pi {plicity = Explicit; ident; dom; cod = build_type rest ret}
+    in
+    let body = build_lam params body in
+    let typ = build_type params ret in
+    Function { ident; typ; body }
+  }
 
 let const_decl := 
   | CONST; ident = IDENT; typ = preceded(COLON, type_expr); 
@@ -79,18 +76,21 @@ let type_param :=
 let constructor :=
   | option(PIPE); name = IDENT; COLON; ty = type_expr; { (name, ty) }
 
+let params :=
+  | ps = param+; { ps }
+  | UNIT; { [Ident.Intern.underscore, `Var (Ident.Intern.intern "Unit")] }
+
 let param :=
   | LPAREN; x = IDENT; COLON; ty = type_expr; RPAREN; { (x, ty) }
-  | x = IDENT; { (x, `Type) }
 
 (* Type expressions *)
 let type_expr :=
   | t = type_atom; { t }
-  | t1 = type_atom; ARROW; t2 = type_expr; { 
-      `Pi (Ident.Intern.underscore, t1, t2) 
+  | dom = type_atom; ARROW; cod = type_expr; { 
+      `Pi { plicity = Explicit; ident = Ident.Intern.underscore; dom; cod } 
     }
-  | LPAREN; x = IDENT; COLON; t1 = type_expr; RPAREN; ARROW; t2 = type_expr; {
-      `Pi (x, t1, t2)
+  | LPAREN; ident = IDENT; COLON; dom = type_expr; RPAREN; ARROW; cod = type_expr; {
+      `Pi {plicity = Explicit; ident; dom; cod}
     }
 
 let type_atom :=
@@ -107,9 +107,9 @@ let record_type_field :=
   | name = IDENT; COLON; ty = type_expr; { (name, ty) }
 
 let record_type_tail :=
-  | { Implicit }
-  | PIPE; x = IDENT; { Explicit x }
-  | BANG; { ExplicitClosed }
+  | { ImplicitTail }
+  | PIPE; x = IDENT; { ExplicitTail x }
+  | BANG; { TailClosed }
 
 let expr_top :=
   | e = expr; EOF; { e }
@@ -202,3 +202,4 @@ let record_field :=
   | name = IDENT; EQUALS; value = expr; {
       (name, value)
     }
+

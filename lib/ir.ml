@@ -239,10 +239,10 @@ and convert_literal : Term.ast Term.literal -> literal = function
 (* Convert a Term.value type to IR type *)
 and convert_type : Term.ast -> ty = function
   | `Var name -> TVar name
-  | `Pi (_, dom, cod) ->
+  | `Pi { dom; cod; _ } ->
     (* Flatten curried functions: Int -> Int -> Int becomes TFunction { args = [Int; Int]; returns = Int } *)
     let rec collect_args acc = function
-      | `Pi (_, dom, cod) -> collect_args (convert_type dom :: acc) cod
+      | `Pi Term.{ cod; _ } -> collect_args (convert_type dom :: acc) cod
       | return_type -> List.rev acc, convert_type return_type
     in
     let args, returns = collect_args [ convert_type dom ] cod in
@@ -278,7 +278,7 @@ and convert_type : Term.ast -> ty = function
 (* Extract parameter types from nested Pi types *)
 and extract_pi_types (pi_type : Term.ast) =
   match pi_type with
-  | `Pi (_, dom, cod) ->
+  | `Pi { dom; cod; _ } ->
     let rest_types = extract_pi_types cod in
     convert_type dom :: rest_types
   | other -> [ convert_type other ]

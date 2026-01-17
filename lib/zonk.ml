@@ -7,7 +7,10 @@ let rec zonk : Term.ast -> Term.ast = function
      | None -> `Meta m)
   | `App (f, x) -> `App (zonk f, zonk x)
   | `Lam (x, body) -> `Lam (x, zonk body)
-  | `Pi (x, dom, cod) -> `Pi (x, zonk dom, zonk cod)
+  | `Pi { plicity; ident; dom; cod } ->
+    let dom = zonk dom
+    and cod = zonk cod in
+    `Pi { plicity; ident; dom; cod }
   | `Let (ident, ty, value, body) ->
     `Let (ident, Option.map ~f:zonk ty, zonk value, zonk body)
   | `Ann (x, t) -> `Ann (zonk x, zonk t)
@@ -34,7 +37,8 @@ and zonk_value : Term.value -> Term.value = function
      | None -> `Neutral (NMeta m))
   | `App (f, x) -> `App (zonk_value f, zonk_value x)
   | `Lam (x, body) -> `Lam (x, Fun.compose zonk_value body)
-  | `Pi (x, dom, cod) -> `Pi (x, zonk_value dom, Fun.compose zonk_value cod)
+  | `Pi (plicity, x, dom, cod) ->
+    `Pi (plicity, x, zonk_value dom, Fun.compose zonk_value cod)
   | `Ann (x, t) -> `Ann (zonk_value x, zonk_value t)
   | `Lit lit -> `Lit (Term.over_literal zonk_value lit)
   | `Proj (tm, field) -> `Proj (zonk_value tm, field)

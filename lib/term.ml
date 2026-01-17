@@ -86,9 +86,23 @@ let is_annotation : type a. a base -> bool = function
 (* ['a term_binders] allows us to abstract over binders, i.e. HOAS for [value] *)
 type 'a term_binders =
   [ `Lam of Ident.t * 'a
-  | `Pi of Ident.t * 'a * 'a
+  | `Pi of 'a pi
   | `Let of Ident.t * 'a option * 'a * 'a
   ]
+[@@deriving show, sexp, map]
+
+and 'a pi =
+  { plicity : plicity
+  ; ident : Ident.t
+  ; dom : 'a
+  ; cod : 'a
+  }
+[@@deriving show, sexp, map]
+
+and plicity =
+  | Implicit
+  | Instance
+  | Explicit
 [@@deriving show, sexp, map]
 
 type cst =
@@ -108,15 +122,15 @@ and row_syntax =
 
 and record_tail =
   (* Implicit tail `{ x : Float, y : Float }`*)
-  | Implicit
+  | ImplicitTail
   (* Explicit tail `{ x : Float, y : Float | rest }` *)
-  | Explicit of Ident.t
+  | ExplicitTail of Ident.t
   (* Explicitly closed `{ x : Float, y : Float !}` *)
-  | ExplicitClosed
+  | TailClosed
 [@@deriving show, sexp]
 
 let tail_opt : record_tail -> Ident.t option = function
-  | Explicit ident -> Some ident
+  | ExplicitTail ident -> Some ident
   | _ -> None
 ;;
 
@@ -132,7 +146,7 @@ type ast =
 let rec desugar : cst -> ast = function
   | `Pos (pos, t) -> `Pos (pos, desugar t)
   | `Infix inf -> `Infix (map_infix desugar inf)
-  | `RecordType { fields; tail = ExplicitClosed } ->
+  | `RecordType { fields; tail = TailClosed } ->
     let fields = Map.map ~f:desugar fields in
     `RecordType { fields; tail = None }
   | `RecordType { fields; tail } ->
@@ -154,7 +168,7 @@ let rec desugar : cst -> ast = function
 type value =
   [ value base
   | `Lam of Ident.t * (value -> value)
-  | `Pi of Ident.t * value * (value -> value)
+  | `Pi of plicity * Ident.t * value * (value -> value)
   | `RecordType of value row
   | `Neutral of neutral
   | `Opaque

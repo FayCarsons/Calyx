@@ -58,6 +58,7 @@ rule token = parse
   | whitespace { token lexbuf }
   | newline    { Lexing.new_line lexbuf; token lexbuf }
   | "//"       { comment lexbuf }
+  | "()"       { UNIT }
   | '('        { LPAREN }
   | ')'        { RPAREN }
   | '{'        { LBRACE }

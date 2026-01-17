@@ -39,17 +39,18 @@ end
 
 module WGSL : M = struct
   let standard_library =
+    let open Term in
     Ident.Map.of_alist_exn  [ Intern.intern "Int", Env.Typed (`Opaque, `Type)
     ; ( Intern.intern "+"
       , Env.Typed
           ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern  "y", fun y -> `App (`App (`Var (Intern.intern "+"), x), y)))
           , `Pi
-              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
+              (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
           ) )
     ; ( Intern.intern "succ"
       , Env.Typed
           ( `Lam (Intern.intern "x", fun x -> `App (`App (`Var (Intern.intern "+"), x), `Lit (Int 1)))
-          , `Pi (Intern.underscore, `Var (Intern.intern "Int"), fun _ -> `Var (Intern.intern "Int")) ) )
+          , `Pi (Explicit, Intern.underscore, `Var (Intern.intern "Int"), fun _ -> `Var (Intern.intern "Int")) ) )
     ]
   ;;
 
@@ -220,6 +221,7 @@ module Javascript : M = struct
   let name = Intern.lookup
 
   let standard_library =
+    let open Term in
     Ident.Map.of_alist_exn
     [ Intern.intern "Int", Env.Typed (`Opaque, `Type)
     ; Intern.intern "Bool", Env.Typed (`Opaque, `Type)
@@ -228,46 +230,46 @@ module Javascript : M = struct
       , Env.Typed
           ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern "y", fun y -> `App (`App (`Var (Intern.intern "+"), x), y)))
           , `Pi
-              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
+              (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
           ) )
     ; ( Intern.intern "-"
       , Env.Typed
           ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern "y", fun y -> `App (`App (`Var (Intern.intern "-"), x), y)))
           , `Pi
-              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
+              (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
           ) )
     ; ( Intern.intern "*"
       , Env.Typed
           ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern "y", fun y -> `App (`App (`Var (Intern.intern "*"), x), y)))
           , `Pi
-              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
+              (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
           ) )
     ; ( Intern.intern "/"
       , Env.Typed
           ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern "y", fun y -> `App (`App (`Var (Intern.intern "/"), x), y)))
           , `Pi
-              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
+              (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Int")))))
           ) )
     ; ( Intern.intern "=="
       , Env.Typed
           ( `Lam (Intern.intern "x", fun x -> `Lam (Intern.intern "y", fun y -> `App (`App (`Var (Intern.intern "=="), x), y)))
           , `Pi
-              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Bool")))))
+              (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Bool")))))
           ) )
     ; ( Intern.intern "succ"
       , Env.Typed
           ( `Lam (Intern.intern "x", fun x -> `App (`App (`Var (Intern.intern "+"), x), `Lit (Int 1)))
-          , `Pi (Intern.underscore, `Var (Intern.intern "Int"), fun _ -> `Var (Intern.intern "Int")) ) )
+          , `Pi (Explicit, Intern.underscore, `Var (Intern.intern "Int"), fun _ -> `Var (Intern.intern "Int")) ) )
     ; ( Intern.intern "<"
       , Env.Typed
           ( `Lam (Intern.intern "a", fun a -> `Lam (Intern.intern "b", fun b -> `App (`App (`Var (Intern.intern "<"), a), b)))
           , `Pi
-              (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Bool")))))
+              (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Pi (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Bool")))))
           ) )
     ; ( Intern.intern "print"
       , Env.Typed
           ( `Lam (Intern.intern "a", fun a -> `App (`Var (Intern.intern "print"), a))
-          , `Pi (Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Unit"))) ) )
+          , `Pi (Explicit, Intern.underscore, `Var (Intern.intern "Int"), Fun.const (`Var (Intern.intern "Unit"))) ) )
     ]
   ;;
 
@@ -345,6 +347,6 @@ module Javascript : M = struct
     |> emit
     |> String.append "const print = x => console.log(x);\n\n"
     |> String.append "\n"
-    |> Fun.flip String.append "\n\nconsole.log(main())"
+    |> Fun.flip String.append "\n\nprint(main())"
   ;;
 end

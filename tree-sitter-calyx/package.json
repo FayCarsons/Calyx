@@ -1,0 +1,19 @@
+{
+  "name": "tree-sitter-calyx",
+  "version": "0.1.0",
+  "main": "bindings/node",
+  "scripts": {
+    "build": "tree-sitter generate",
+    "test": "tree-sitter test"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.20.8"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.calyx",
+      "file-types": ["calyx"],
+      "highlights": "queries/highlights.scm"
+    }
+  ]
+}

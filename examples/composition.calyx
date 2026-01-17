@@ -5,6 +5,5 @@ def double (n : Int) -> Int do n + n
 
 def succ (n : Int) -> Int do n + 1
 
-def main -> Int do
-  let doubleSucc = compose double succ in
-  doubleSucc 5
+def main () -> Int do
+  compose double succ  5

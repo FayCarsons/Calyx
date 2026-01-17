@@ -19,9 +19,11 @@ let rec eval : Term.ast -> Term.value = function
      | None -> `Neutral (NVar (0, name)))
   | `Ann (e, _) -> eval e
   | `Type -> `Type
-  | `Pi (x, dom, cod) ->
-    let cod = fun v -> Env.local ~f:(Env.with_binding x ~value:v) (fun () -> eval cod) in
-    `Pi (x, eval dom, cod)
+  | `Pi { plicity; ident; dom; cod } ->
+    let cod =
+      fun v -> Env.local ~f:(Env.with_binding ident ~value:v) (fun () -> eval cod)
+    in
+    `Pi (plicity, ident, eval dom, cod)
   | `Lam (x, body) ->
     let body =
       fun v -> Env.local ~f:(Env.with_binding x ~value:v) (fun () -> eval body)
@@ -73,10 +75,10 @@ let rec quote (lvl : int) : Term.value -> Term.ast = function
   | `App (f, x) -> `App (quote lvl f, quote lvl x)
   | `Neutral n -> quote_neutral lvl n
   | `Type -> `Type
-  | `Pi (x, dom, cod) ->
+  | `Pi (plicity, ident, dom, cod) ->
     (* level shouldn't matter here because [var] is just used to access the body of [cod] *)
-    let var = `Neutral (NVar (0, x)) in
-    `Pi (x, quote lvl dom, quote (succ lvl) (cod var))
+    let var = `Neutral (NVar (0, ident)) in
+    `Pi { plicity; ident; dom = quote lvl dom; cod = quote (succ lvl) (cod var) }
   | `Lam (x, b) ->
     let var = `Neutral (NVar (0, x)) in
     `Lam (x, quote (succ lvl) (b var))
@@ -101,28 +103,28 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     (* print_endline "infer.Var"; *)
     let* ty = Env.lookup_type i |> Result.of_option ~error:(`NotFound i) in
     Ok (ty, `Ann (`Var i, quote 0 ty))
-  | `Pi (x, dom, cod) ->
+  | `Pi { plicity; ident; dom; cod } ->
     (* print_endline "infer.Pi"; *)
     let* value = Result.map ~f:eval @@ check dom `Type in
-    let* _ = Env.local ~f:(Env.with_binding x ~value) (fun () -> check cod `Type) in
-    Ok (`Type, `Pi (x, dom, cod))
+    let* _ = Env.local ~f:(Env.with_binding ident ~value) (fun () -> check cod `Type) in
+    Ok (`Type, `Pi { plicity; ident; dom; cod })
   | `Lam (x, body) ->
     (* print_endline "infer.Lam"; *)
     let dom = `Neutral (NMeta (Meta.fresh ())) in
     let* body_ty, body = Env.fresh_var x dom (fun _ -> infer body) in
-    let ty = `Pi (x, dom, Fun.const body_ty) in
+    let ty = `Pi (Explicit, x, dom, Fun.const body_ty) in
     Ok (ty, `Ann (`Lam (x, body), quote 0 ty))
   | `App (f, x) ->
     (* print_endline "infer.App"; *)
     let* tf, f = infer f in
     let* dom, cod =
       match Solve.force tf with
-      | `Pi (_, dom, cod) -> Ok (dom, cod (`Neutral (NVar (0, Intern.underscore))))
+      | `Pi (_, _, dom, cod) -> Ok (dom, cod (`Neutral (NVar (0, Intern.underscore))))
       | `Neutral (NMeta _) ->
         let dom = `Neutral (NMeta (Meta.fresh ())) in
         let cod = `Neutral (NMeta (Meta.fresh ())) in
         Solve.Constraints.(
-          tell @@ Equals (tf, `Pi (Intern.underscore, dom, Fun.const cod)));
+          tell @@ Equals (tf, `Pi (Explicit, Intern.underscore, dom, Fun.const cod)));
         Ok (dom, cod)
       | otherwise -> Error (`Expected ("function", Term.show_value otherwise))
     in
@@ -262,13 +264,13 @@ and infer_proj : Term.ast -> Ident.t -> (Term.value * Term.ast, CalyxError.t) re
 and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
   fun term expected ->
   match term, expected with
-  | `Lam (x, body), `Pi (_, dom, cod) ->
+  | `Lam (x, body), `Pi (Explicit, _, dom, cod) ->
     let* body' = Env.fresh_var x dom (fun var -> check body (cod var)) in
     Ok (`Lam (x, body'))
   | `Lam (x, body), `Neutral (NMeta _ as m) ->
     let dom = `Neutral (NMeta (Meta.fresh ())) in
     let cod = `Neutral (NMeta (Meta.fresh ())) in
-    Solve.Constraints.(tell @@ Equals (`Neutral m, `Pi (x, dom, Fun.const cod)));
+    Solve.Constraints.(tell @@ Equals (`Neutral m, `Pi (Explicit, x, dom, Fun.const cod)));
     let* body' = Env.fresh_var x dom (fun _ -> check body cod) in
     Ok (`Lam (x, body'))
   | `Let (ident, ty, value, body), expected ->

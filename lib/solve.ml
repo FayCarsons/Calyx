@@ -85,7 +85,7 @@ let rec occurs (m : Meta.t) (v : value) : bool =
   | `Neutral (NMeta m') -> Meta.equal m m'
   | `Neutral (NApp (f, x)) -> occurs_neutral m f || occurs m x
   | `Neutral (NProj (n, _)) -> occurs_neutral m n
-  | `Pi (_, dom, cod) ->
+  | `Pi (_, _, dom, cod) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     occurs m dom || occurs m (cod var)
   | `Lam (_, body) ->
@@ -139,7 +139,7 @@ let rec unify : value -> value -> (unit, CalyxError.t) result =
     let* right = vapp f var in
     Constraints.(tell (body var %= right));
     Ok ()
-  | `Pi (_, dom, cod), `Pi (_, dom', cod') ->
+  | `Pi (_, _, dom, cod), `Pi (_, _, dom', cod') ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     Constraints.(tell (dom %= dom'));
     Constraints.(tell (cod var %= cod' var));

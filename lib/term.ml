@@ -129,6 +129,13 @@ and record_tail =
   | TailClosed
 [@@deriving show, sexp]
 
+type 'a sum_type =
+  { ident : Ident.t
+  ; params : 'a Ident.Map.t
+  ; constructors : 'a list Ident.Map.t
+  }
+[@@deriving show, sexp]
+
 let tail_opt : record_tail -> Ident.t option = function
   | ExplicitTail ident -> Some ident
   | _ -> None
@@ -140,6 +147,7 @@ type ast =
   | `Pos of Pos.t * ast
   | `Meta of Meta.t
   | `RecordType of ast row
+  | `SumType of ast sum_type
   ]
 [@@deriving show, sexp]
 
@@ -170,6 +178,7 @@ type value =
   | `Lam of Ident.t * (value -> value)
   | `Pi of plicity * Ident.t * value * (value -> value)
   | `RecordType of value row
+  | `SumType of value sum_type
   | `Neutral of neutral
   | `Opaque
   ]
@@ -198,11 +207,7 @@ type 'a declaration =
       ; params : 'a Ident.Map.t
       ; fields : 'a Ident.Map.t
       }
-  | SumDecl of
-      { ident : Ident.t
-      ; params : 'a Ident.Map.t
-      ; constructors : 'a list Ident.Map.t
-      }
+  | SumDecl of 'a sum_type
 [@@deriving show, sexp]
 
 let desugar_toplevel = function

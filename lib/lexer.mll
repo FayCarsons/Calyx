@@ -54,10 +54,15 @@ let int = '-'? digit+
 let hex_int = "0x" hex_digit+
 let float = '-'? digit+ '.' digit* (['e' 'E'] ['+' '-']? digit+)?
 
+let single_line_comment = "--"
+let multi_line_comment_open = "{-"
+let multi_line_comment_close = "-}"
+
 rule token = parse
   | whitespace { token lexbuf }
   | newline    { Lexing.new_line lexbuf; token lexbuf }
-  | "//"       { comment lexbuf }
+  | single_line_comment       { single_line_comment lexbuf }
+  | multi_line_comment_open { multi_line_comment lexbuf }
   | "()"       { UNIT }
   | '('        { LPAREN }
   | ')'        { RPAREN }
@@ -112,10 +117,15 @@ and operator buf = parse
       | _ -> OPERATOR (Intern.intern op)
     }
 
-and comment = parse
+and single_line_comment = parse
   | newline    { Lexing.new_line lexbuf; token lexbuf }
   | eof        { EOF }
-  | _          { comment lexbuf }
+  | _          { single_line_comment lexbuf }
+
+and multi_line_comment = parse 
+  | newline { Lexing.new_line lexbuf; multi_line_comment lexbuf }
+  | multi_line_comment_close { token lexbuf }
+  | _ { multi_line_comment lexbuf }
 
 and string buf = parse
   | '"'        { STRING (Buffer.contents buf) }

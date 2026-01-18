@@ -157,6 +157,7 @@ let rec unify : value -> value -> (unit, CalyxError.t) result =
   | `Neutral l, `Neutral r -> unify_neutral l r
   | `Lit l, `Lit r -> unify_lit l r
   | `RecordType a, `RecordType b -> unify_record_types a b
+  | `SumType a, `SumType b -> unify_sum_types a b
   | `Err _, _ | _, `Err _ -> Ok ()
   | a, b -> Error (`UnificationFailure (Term.show_value a, Term.show_value b))
 
@@ -197,6 +198,26 @@ and unify_record_literals
         (`Expected (Ident.Map.show Term.show_value a, Ident.Map.show Term.show_value b)))
   else
     Error (`Expected (Ident.Map.show Term.show_value a, Ident.Map.show Term.show_value b))
+
+and unify_sum_types
+  :  value sum_type -> value sum_type -> (unit, CalyxError.t) result
+  =
+  fun a b ->
+  (* Sum types unify if they have the same name *)
+  if Ident.equal a.ident b.ident
+  then (
+    (* Unify constructors pairwise *)
+    Map.iter2 a.constructors b.constructors ~f:(fun ~key:_ ~data ->
+      match data with
+      | `Both (args_a, args_b) ->
+        List.iter2_exn args_a args_b ~f:(fun a b -> Constraints.(tell (a %= b)))
+      | _ -> ());
+    Ok ())
+  else
+    Error
+      (`UnificationFailure
+          ( Printf.sprintf "SumType %s" (Ident.Intern.lookup a.ident)
+          , Printf.sprintf "SumType %s" (Ident.Intern.lookup b.ident) ))
 
 and unify_record_types : value row -> value row -> (unit, CalyxError.t) result =
   fun a b ->

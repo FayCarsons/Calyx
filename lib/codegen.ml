@@ -177,6 +177,7 @@ module WGSL : M = struct
   and compile_expr : Ir.t -> string = function
     | Var n -> var n
     | App (f, x) -> app f (String.concat ~sep:", " @@ List.map ~f:compile_expr x)
+    | Ctor _ -> failwith "Sum types not supported in WGSL backend"
     | Infix (left, op, right) ->
       let left_expr = compile_expr left in
       let right_expr = compile_expr right in
@@ -212,7 +213,7 @@ module WGSL : M = struct
         (compile_expr t)
         (compile_expr f)
         (compile_expr scrut)
-    | Match _ -> failwith "TODO"
+    | Match _ -> failwith "Pattern matching not supported in WGSL backend"
     | Proj (term, field) -> proj (compile_expr term) field
     | Lit (Int n) -> int n
     | Lit (UInt n) -> uint n
@@ -256,6 +257,7 @@ module WGSL : M = struct
         |> String.concat ~sep:",\n  "
       in
       Printf.sprintf "struct %s {\n  %s\n}\n" (Intern.lookup ident) fields_str
+    | SumType _ -> failwith "Sum types not supported in WGSL backend"
   ;;
 
   (* Main compilation entry point *)
@@ -437,6 +439,11 @@ module Javascript : M = struct
   and compile_expr : Ir.t -> string = function
     | Var n -> var n
     | App (f, x) -> app f (String.concat ~sep:", " @@ List.map ~f:compile_expr x)
+    | Ctor (ctor_name, args) ->
+      let ctor_str = name ctor_name in
+      (match args with
+       | [] -> ctor_str
+       | _ -> Printf.sprintf "%s(%s)" ctor_str (String.concat ~sep:", " @@ List.map ~f:compile_expr args))
     | Infix (left, op, right) ->
       let left_expr = compile_expr left in
       let right_expr = compile_expr right in
@@ -445,7 +452,7 @@ module Javascript : M = struct
     | If (scrut, t, f) ->
       let scrut, t, f = compile_expr scrut, compile_expr t, compile_expr f in
       ternary scrut t f
-    | Match _ -> failwith "TODO"
+    | Match (scrut, arms) -> compile_match (compile_expr scrut) arms
     | Proj (term, field) -> proj (compile_expr term) field
     | Lit (Int n) -> int n
     | Lit (UInt n) -> uint n
@@ -454,6 +461,46 @@ module Javascript : M = struct
     | Lit (Record fields) ->
       let compiled_fields = Map.map ~f:compile_expr fields in
       record_literal compiled_fields
+
+  and compile_match (scrut : string) (arms : (Ir.pattern * Ir.t) list) : string =
+    match arms with
+    | [] -> failwith "Empty match arms"
+    | [ (_, body) ] -> compile_expr body (* Single arm, no condition needed *)
+    | (pat, body) :: rest ->
+      let cond = compile_pattern_condition scrut pat in
+      let bindings = compile_pattern_bindings scrut pat in
+      let body_expr =
+        match bindings with
+        | [] -> compile_expr body
+        | _ ->
+          Printf.sprintf
+            "((%s) => %s)(%s)"
+            (String.concat ~sep:", " @@ List.map ~f:fst bindings)
+            (compile_expr body)
+            (String.concat ~sep:", " @@ List.map ~f:snd bindings)
+      in
+      Printf.sprintf "(%s) ? %s : %s" cond body_expr (compile_match scrut rest)
+
+  and compile_pattern_condition (scrut : string) : Ir.pattern -> string = function
+    | Ir.PVar _ -> "true"
+    | Ir.PWild -> "true"
+    | Ir.PCtor (ctor_name, _) -> Printf.sprintf "%s._tag === \"%s\"" scrut (name ctor_name)
+    | Ir.PLit lit ->
+      (match lit with
+       | Int n -> Printf.sprintf "%s === %d" scrut n
+       | UInt n -> Printf.sprintf "%s === %d" scrut n
+       | Float x -> Printf.sprintf "%s === %f" scrut x
+       | Bool b -> Printf.sprintf "%s === %s" scrut (bool b)
+       | Record _ -> failwith "Record literal patterns not supported")
+
+  and compile_pattern_bindings (scrut : string) : Ir.pattern -> (string * string) list = function
+    | Ir.PVar x -> [ name x, scrut ]
+    | Ir.PWild -> []
+    | Ir.PCtor (_, args) ->
+      List.concat_mapi args ~f:(fun i pat ->
+        let field_access = Printf.sprintf "%s._%d" scrut i in
+        compile_pattern_bindings field_access pat)
+    | Ir.PLit _ -> []
   ;;
 
   (* Compile a top-level declaration *)
@@ -467,6 +514,25 @@ module Javascript : M = struct
     | Constant { ident; value; _ } ->
       Printf.sprintf "const %s = %s;\n" (name ident) (compile_expr value)
     | RecordType _ -> ""
+    | SumType { ident = _; constructors; _ } ->
+      (* Generate constructor functions that return tagged objects *)
+      List.map constructors ~f:(fun (ctor_name, args) ->
+        let ctor_str = name ctor_name in
+        match List.length args with
+        | 0 -> Printf.sprintf "const %s = { _tag: \"%s\" };" ctor_str ctor_str
+        | n ->
+          let params = List.init n ~f:(fun i -> Printf.sprintf "_%d" i) in
+          let fields =
+            List.mapi params ~f:(fun i p -> Printf.sprintf "_%d: %s" i p)
+            |> String.concat ~sep:", "
+          in
+          Printf.sprintf
+            "const %s = (%s) => ({ _tag: \"%s\", %s });"
+            ctor_str
+            (String.concat ~sep:", " params)
+            ctor_str
+            fields)
+      |> String.concat ~sep:"\n"
   ;;
 
   (* Main compilation entry point *)

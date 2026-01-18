@@ -44,6 +44,7 @@ type t =
   | Var of Ident.t
   | Lit of literal
   | App of Ident.t * t list
+  | Ctor of Ident.t * t list (* Constructor application: Some(x) *)
   | Let of Ident.t * ty * t * t
   | If of t * t * t
   | Match of t * (pattern * t) list
@@ -58,7 +59,12 @@ and literal =
   (* TODO: This should hold an optional type name *)
   | Record of t Ident.Map.t
 
-and pattern = string [@@deriving show, sexp]
+and pattern =
+  | PVar of Ident.t
+  | PWild
+  | PCtor of Ident.t * pattern list
+  | PLit of literal
+[@@deriving show, sexp]
 
 type declaration =
   | Function of
@@ -77,6 +83,11 @@ type declaration =
       ; params : ty Ident.Map.t
       ; fields : ty Ident.Map.t
       }
+  | SumType of
+      { ident : Ident.t
+      ; params : ty Ident.Map.t
+      ; constructors : (Ident.t * ty list) list
+      }
 
 module PrettyIR = struct
   (* IR *)
@@ -85,9 +96,14 @@ module PrettyIR = struct
     | Lit lit -> ir_literal lit
     | App (f, xs) ->
       Printf.sprintf
-        "%s %s"
+        "%s(%s)"
         (Ident.Intern.lookup f)
         (String.concat ~sep:", " @@ List.map ~f:ir xs)
+    | Ctor (name, args) ->
+      Printf.sprintf
+        "%s(%s)"
+        (Ident.Intern.lookup name)
+        (String.concat ~sep:", " @@ List.map ~f:ir args)
     | Let (ident, ty, value, body) ->
       Printf.sprintf
         "let %s: %s = %s in\n%s"
@@ -113,7 +129,7 @@ module PrettyIR = struct
     | Float x -> string_of_float x
     | Bool b -> string_of_bool b
     | Record fields ->
-      Map.to_alist fields
+      Map.to_alist ~key_order:`Increasing fields
       |> List.map ~f:(fun (ident, value) ->
         Printf.sprintf "%s = %s" (Ident.Intern.lookup ident) (ir value))
       |> String.concat ~sep:", "
@@ -130,7 +146,16 @@ module PrettyIR = struct
     | TRecord fields -> Ident.Map.show show_ty fields
     | Skolem -> "<Skolem>"
 
-  and ir_pattern : pattern -> string = fun _ -> ""
+  and ir_pattern : pattern -> string = function
+    | PVar x -> Ident.Intern.lookup x
+    | PWild -> "_"
+    | PCtor (name, args) ->
+      Printf.sprintf
+        "%s(%s)"
+        (Ident.Intern.lookup name)
+        (String.concat ~sep:", " @@ List.map ~f:ir_pattern args)
+    | PLit lit -> ir_literal lit
+  ;;
 
   let declaration : declaration -> string = function
     | Function { ident; args; returns; body } ->
@@ -157,18 +182,36 @@ module PrettyIR = struct
         (ir value)
     | RecordType { ident; params; fields } ->
       let params =
-        Map.to_alist params
+        Map.to_alist ~key_order:`Increasing params
         |> List.map ~f:(fun (ident, ty) ->
           Printf.sprintf "(%s : %s)" (Ident.Intern.lookup ident) (ir_ty ty))
         |> String.concat ~sep:" "
       in
       let fields =
-        Map.to_alist fields
+        Map.to_alist ~key_order:`Increasing fields
         |> List.map ~f:(fun (ident, ty) ->
           Printf.sprintf "%s : %s" (Ident.Intern.lookup ident) (ir_ty ty))
         |> String.concat ~sep:"\n"
       in
       Printf.sprintf "data %s %s where\n%s\n\n" (Ident.Intern.lookup ident) params fields
+    | SumType { ident; params; constructors } ->
+      let params =
+        Map.to_alist ~key_order:`Increasing params
+        |> List.map ~f:(fun (ident, ty) ->
+          Printf.sprintf "(%s : %s)" (Ident.Intern.lookup ident) (ir_ty ty))
+        |> String.concat ~sep:" "
+      in
+      let constructors =
+        List.map constructors ~f:(fun (ctor, params) ->
+          Ident.Intern.lookup ctor :: List.map ~f:ir_ty params)
+        |> List.map ~f:(String.concat ~sep:" ")
+        |> String.concat ~sep:"\n|  "
+      in
+      Printf.sprintf
+        "data %s %s where\n  %s"
+        (Ident.Intern.lookup ident)
+        params
+        constructors
   ;;
 end
 
@@ -206,6 +249,7 @@ let rec convert_expr : Term.ast -> t = function
   | `Proj (tm, field) -> Proj (convert_expr tm, field)
   | `Match (scrut, arms) ->
     let open Util in
+    (* Special case: if-then-else on True/False *)
     let arms' =
       Tuple.into
       <$> Stdlib.List.assoc_opt (Term.PVar (Ident.Intern.intern "True")) arms
@@ -214,7 +258,11 @@ let rec convert_expr : Term.ast -> t = function
     (match arms' with
      | Some (then_, else_) ->
        If (convert_expr scrut, convert_expr then_, convert_expr else_)
-     | None -> failwith "Arbitrary pattern matching not implemented yet")
+     | None ->
+       let converted_arms =
+         List.map arms ~f:(fun (pat, body) -> convert_pattern pat, convert_expr body)
+       in
+       Match (convert_expr scrut, converted_arms))
   | `Pos (_, tm) -> convert_expr tm
   | `Ann (`Lam (x, body), pi_type) -> convert_lambda_to_function pi_type x body
   | `Ann (x, _type) -> convert_expr x
@@ -235,6 +283,13 @@ and convert_literal : Term.ast Term.literal -> literal = function
   | Term.Float x -> Float x
   | Term.Bool b -> Bool b
   | Term.Record fields -> Record (Map.map ~f:convert_expr fields)
+
+and convert_pattern : Term.ast Term.pattern -> pattern = function
+  | Term.PVar x -> PVar x
+  | Term.PWild -> PWild
+  | Term.PCtor (name, args) -> PCtor (name, List.map ~f:convert_pattern args)
+  | Term.PLit lit -> PLit (convert_literal lit)
+  | Term.PRec _ -> failwith "Record patterns not yet implemented"
 
 (* Convert a Term.value type to IR type *)
 and convert_type : Term.ast -> ty = function
@@ -269,6 +324,7 @@ and convert_type : Term.ast -> ty = function
   | `Meta _ -> Skolem
   | `Ann (x, _) -> convert_type x
   | `Type -> TVar (Ident.Intern.intern "Type") (* Kind of types *)
+  | `SumType { ident; _ } -> TVar ident (* Sum types become type variables in IR *)
   | other ->
     failwith
     @@ Printf.sprintf
@@ -323,8 +379,8 @@ let convert : Term.ast Term.declaration list -> declaration list =
       let args, converted_body = collect_lambda_params [] body in
       let args = List.rev args in
       (* Put back in correct order *)
-      let typed_args = List.zip_exn args arg_types in
-      Function { ident; args = typed_args; returns = return_type; body = converted_body }
+      let args = List.zip_exn args arg_types in
+      Function { ident; args; returns = return_type; body = converted_body }
     | Term.Constant { ident; typ; body } ->
       (* This is a constant declaration *)
       let value = convert_expr body in
@@ -334,8 +390,26 @@ let convert : Term.ast Term.declaration list -> declaration list =
       let params = Map.map ~f:convert_type params
       and fields = Map.map ~f:convert_type fields in
       RecordType { ident; params; fields }
-    | Term.SumDecl _ -> failwith "Sum types not implemented in 'ir.ml'"
+    | Term.SumDecl { ident; params; constructors } ->
+      let params = Map.map ~f:convert_type params in
+      let constructors =
+        Map.to_alist ~key_order:`Increasing constructors
+        |> List.map ~f:(fun (name, args) -> name, List.map ~f:convert_type args)
+      in
+      SumType { ident; params; constructors }
   in
-  let x, xs = Context.handle (fun () -> Fresh.handle (fun () -> List.map ~f:go decls)) in
+  let is_decl = function
+    | Term.RecordDecl _ | Term.SumDecl _ -> -1
+    | _ -> 1
+  in
+  (* FIXME: Currently we are just putting type declarations in the front as a poor replacement of topo sort 
+    This should be replaced with actual topo sort
+  *)
+  let sorted_declarations =
+    List.sort ~compare:(fun a b -> Int.compare (is_decl a) (is_decl b)) decls
+  in
+  let x, xs =
+    Context.handle (fun () -> Fresh.handle (fun () -> List.map ~f:go sorted_declarations))
+  in
   List.append x xs
 ;;

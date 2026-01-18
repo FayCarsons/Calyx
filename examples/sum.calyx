@@ -1,12 +1,12 @@
-data Option (a : Type) where
-| Some a
-| None
+data Maybe where
+| Just Int
+| Nothing
 
-def map {a, b} (self : Option a) (f : a -> b) -> Option b do 
-  match self with
-  | Some x -> Some (f x)
-  | None -> None
+def fromMaybe (fallback : Int) (m : Maybe) -> Int do
+  match m with
+  | Just x -> x
+  | Nothing -> fallback
   end
 
-def main () -> Int do 
-  map (Some 42) succ
+def main () -> Int do
+  fromMaybe 0 (Just 42)

@@ -26,7 +26,7 @@ module String : sig
   val member : t -> string -> bool
 end
 
-module Int : sig
+module Ident : sig
   type t
 
   (** [create size num_hashes] creates a bloom filter.
@@ -42,9 +42,9 @@ module Int : sig
 
   (** [put t v] inserts value [v] into the filter.
     Dispatches to optimized int path for [int t], string path for [string t]. *)
-  val add : t -> int -> unit
+  val add : t -> int64 -> unit
 
   (** [test t v] tests if value [v] may be in the filter.
     Returns [false] if definitely not present, [true] if possibly present. *)
-  val member : t -> int -> bool
+  val member : t -> int64 -> bool
 end

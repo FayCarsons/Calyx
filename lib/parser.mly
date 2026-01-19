@@ -1,9 +1,11 @@
 %{
 open Term
+module Constructors = ConstructorSet.M
 
 let make_var (ident : Ident.t) : Term.cst = `Var ident
 let make_infix left op right = 
   `Infix { left; op = `Var op; right }
+
 %}
 
 /* Tokens */
@@ -78,7 +80,7 @@ let type_param :=
   | LPAREN; x = IDENT; COLON; ty = type_expr; RPAREN; { (x, ty) }
 
 let constructor :=
-  | PIPE; name = IDENT; tys = type_atom*; { (name, tys) }
+  | PIPE; name = IDENT; tys = type_atom*; { Constructors.add name; (name, tys) }
 
 let params :=
   | ps = param+; { List.concat ps }
@@ -172,7 +174,11 @@ let pattern :=
   | p = pattern_atom; { p }
 
 let pattern_atom :=
-  | x = IDENT; { PVar x }
+  | x = IDENT; {
+      if Constructors.member x
+      then PCtor (x, [])
+      else PVar x
+    }
   | i = INT; { PLit (Int i) }
   | b = BOOL; { PLit (Bool b) }
   | LPAREN; p = pattern; RPAREN; { p }

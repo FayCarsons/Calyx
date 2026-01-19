@@ -40,21 +40,24 @@ module String = struct
   ;;
 end
 
-module Int = struct
-  type t = int filter
+module Ident = struct
+  type t = int64 filter
 
-  let create ~size ~numHashes = create size numHashes
+  let create : size:int -> numHashes:int -> t =
+    fun ~size ~numHashes -> create size numHashes
+  ;;
+
   let count = count
   let size = size
-  let add : t -> int -> unit = _put
-  let member : t -> int -> bool = _test
+  let add : t -> int64 -> unit = _put
+  let member : t -> int64 -> bool = _test
 
   let%test_unit "Int no false negatives" =
     QCheck.Test.check_exn
     @@ QCheck.Test.make
          ~count:1000
          ~name:"inserted ints are found"
-         QCheck.(list_of_size (Gen.int_range 16 512) int)
+         QCheck.(list_of_size (Gen.int_range 16 512) int64)
          (fun ints ->
             let filter = create ~size:8192 ~numHashes:3 in
             List.iter (add filter) ints;
@@ -66,7 +69,7 @@ module Int = struct
     @@ QCheck.Test.make
          ~count:1000
          ~name:"Ints not inserted are not members"
-         QCheck.(list_of_size (Gen.int_range 16 512) int)
+         QCheck.(list_of_size (Gen.int_range 16 512) int64)
          (fun ints ->
             let filter = create ~size:4096 ~numHashes:3 in
             List.for_all (Fun.compose not (member filter)) ints)

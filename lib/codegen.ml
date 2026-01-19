@@ -260,7 +260,6 @@ module WGSL : M = struct
     | SumType _ -> failwith "Sum types not supported in WGSL backend"
   ;;
 
-  (* Main compilation entry point *)
   let compile (decls : Ir.declaration list) : string =
     List.map ~f:compile_declaration decls |> emit |> String.append "\n"
   ;;
@@ -416,7 +415,7 @@ module Javascript : M = struct
   let app f x = Printf.sprintf "%s(%s)" (name f) x
   let let_ id value body = Printf.sprintf "const %s = %s;\n%s" (name id) value body
 
-  (* We can always use ternaries in JavaScript *)
+  (* We can *always* use ternaries in JavaScript *)
   let ternary scrut t f = Printf.sprintf "%s ? %s : %s" scrut t f
 
   let record_literal (fields : string Ident.Map.t) =
@@ -439,11 +438,19 @@ module Javascript : M = struct
   and compile_expr : Ir.t -> string = function
     | Var n -> var n
     | App (f, x) -> app f (String.concat ~sep:", " @@ List.map ~f:compile_expr x)
-    | Ctor (ctor_name, args) ->
+    | Ctor (tag, ctor_name, args) ->
       let ctor_str = name ctor_name in
       (match args with
-       | [] -> ctor_str
-       | _ -> Printf.sprintf "%s(%s)" ctor_str (String.concat ~sep:", " @@ List.map ~f:compile_expr args))
+       | [] -> Printf.sprintf "/* %s */ { _tag: %d }" ctor_str tag
+       | _ ->
+         let fields =
+           List.mapi args ~f:(fun i a -> Printf.sprintf "_%d: %s" i (compile_expr a))
+         in
+         Printf.sprintf
+           "/* %s */ { _tag: %d, %s }"
+           ctor_str
+           tag
+           (String.concat ~sep:", " fields))
     | Infix (left, op, right) ->
       let left_expr = compile_expr left in
       let right_expr = compile_expr right in
@@ -484,7 +491,7 @@ module Javascript : M = struct
   and compile_pattern_condition (scrut : string) : Ir.pattern -> string = function
     | Ir.PVar _ -> "true"
     | Ir.PWild -> "true"
-    | Ir.PCtor (ctor_name, _) -> Printf.sprintf "%s._tag === \"%s\"" scrut (name ctor_name)
+    | Ir.PCtor (tag, _, _) -> Printf.sprintf "%s._tag === %d" scrut tag
     | Ir.PLit lit ->
       (match lit with
        | Int n -> Printf.sprintf "%s === %d" scrut n
@@ -493,10 +500,11 @@ module Javascript : M = struct
        | Bool b -> Printf.sprintf "%s === %s" scrut (bool b)
        | Record _ -> failwith "Record literal patterns not supported")
 
-  and compile_pattern_bindings (scrut : string) : Ir.pattern -> (string * string) list = function
+  and compile_pattern_bindings (scrut : string) : Ir.pattern -> (string * string) list
+    = function
     | Ir.PVar x -> [ name x, scrut ]
     | Ir.PWild -> []
-    | Ir.PCtor (_, args) ->
+    | Ir.PCtor (_, _, args) ->
       List.concat_mapi args ~f:(fun i pat ->
         let field_access = Printf.sprintf "%s._%d" scrut i in
         compile_pattern_bindings field_access pat)
@@ -515,11 +523,12 @@ module Javascript : M = struct
       Printf.sprintf "const %s = %s;\n" (name ident) (compile_expr value)
     | RecordType _ -> ""
     | SumType { ident = _; constructors; _ } ->
-      (* Generate constructor functions that return tagged objects *)
-      List.map constructors ~f:(fun (ctor_name, args) ->
+      (* Generate constructor functions that return tagged objects with integer tags *)
+      (* Constructors are already sorted alphabetically, so index = tag *)
+      List.mapi constructors ~f:(fun tag (ctor_name, args) ->
         let ctor_str = name ctor_name in
         match List.length args with
-        | 0 -> Printf.sprintf "const %s = { _tag: \"%s\" };" ctor_str ctor_str
+        | 0 -> Printf.sprintf "const %s = { _tag: %d };" ctor_str tag
         | n ->
           let params = List.init n ~f:(fun i -> Printf.sprintf "_%d" i) in
           let fields =
@@ -527,10 +536,10 @@ module Javascript : M = struct
             |> String.concat ~sep:", "
           in
           Printf.sprintf
-            "const %s = (%s) => ({ _tag: \"%s\", %s });"
+            "const %s = (%s) => ({ _tag: %d, %s });"
             ctor_str
             (String.concat ~sep:", " params)
-            ctor_str
+            tag
             fields)
       |> String.concat ~sep:"\n"
   ;;

@@ -44,7 +44,7 @@ type t =
   | Var of Ident.t
   | Lit of literal
   | App of Ident.t * t list
-  | Ctor of Ident.t * t list (* Constructor application: Some(x) *)
+  | Ctor of int * Ident.t * t list (* tag, name, args *)
   | Let of Ident.t * ty * t * t
   | If of t * t * t
   | Match of t * (pattern * t) list
@@ -62,7 +62,7 @@ and literal =
 and pattern =
   | PVar of Ident.t
   | PWild
-  | PCtor of Ident.t * pattern list
+  | PCtor of int * Ident.t * pattern list (* tag, name, args *)
   | PLit of literal
 [@@deriving show, sexp]
 
@@ -99,7 +99,7 @@ module PrettyIR = struct
         "%s(%s)"
         (Ident.Intern.lookup f)
         (String.concat ~sep:", " @@ List.map ~f:ir xs)
-    | Ctor (name, args) ->
+    | Ctor (_tag, name, args) ->
       Printf.sprintf
         "%s(%s)"
         (Ident.Intern.lookup name)
@@ -149,7 +149,7 @@ module PrettyIR = struct
   and ir_pattern : pattern -> string = function
     | PVar x -> Ident.Intern.lookup x
     | PWild -> "_"
-    | PCtor (name, args) ->
+    | PCtor (_tag, name, args) ->
       Printf.sprintf
         "%s(%s)"
         (Ident.Intern.lookup name)
@@ -223,6 +223,25 @@ module Context = struct
   include Writer.Make (M)
 end
 
+(* Constructor tag registry - maps constructor names to their alphabetical index *)
+module CtorTags = struct
+  type _ Effect.t += Lookup : Ident.t -> int option Effect.t
+
+  let lookup name = Effect.perform (Lookup name)
+
+  let handle (ctor_tags : int Ident.Map.t) (f : unit -> 'a) : 'a =
+    let open Effect.Deep in
+    try_with f () {
+      effc = (fun (type c) (eff : c Effect.t) ->
+        match eff with
+        | Lookup name ->
+          Some (fun (k : (c, _) continuation) ->
+            continue k (Map.find ctor_tags name))
+        | eff ->
+          Some (fun (k : (c, _) continuation) -> continue k (Effect.perform eff)))
+    }
+end
+
 (* Shared lambda lifting utilities *)
 
 let rec convert_expr : Term.ast -> t = function
@@ -287,7 +306,9 @@ and convert_literal : Term.ast Term.literal -> literal = function
 and convert_pattern : Term.ast Term.pattern -> pattern = function
   | Term.PVar x -> PVar x
   | Term.PWild -> PWild
-  | Term.PCtor (name, args) -> PCtor (name, List.map ~f:convert_pattern args)
+  | Term.PCtor (name, args) ->
+    let tag = CtorTags.lookup name |> Option.value ~default:0 in
+    PCtor (tag, name, List.map ~f:convert_pattern args)
   | Term.PLit lit -> PLit (convert_literal lit)
   | Term.PRec _ -> failwith "Record patterns not yet implemented"
 
@@ -402,14 +423,27 @@ let convert : Term.ast Term.declaration list -> declaration list =
     | Term.RecordDecl _ | Term.SumDecl _ -> -1
     | _ -> 1
   in
-  (* FIXME: Currently we are just putting type declarations in the front as a poor replacement of topo sort 
+  (* FIXME: Currently we are just putting type declarations in the front as a poor replacement of topo sort
     This should be replaced with actual topo sort
   *)
   let sorted_declarations =
     List.sort ~compare:(fun a b -> Int.compare (is_decl a) (is_decl b)) decls
   in
+  (* Build constructor tag map from all sum types *)
+  let ctor_tags =
+    List.fold sorted_declarations ~init:Ident.Map.empty ~f:(fun acc decl ->
+      match decl with
+      | Term.SumDecl { constructors; _ } ->
+        let sorted_ctors = Map.to_alist ~key_order:`Increasing constructors in
+        List.foldi sorted_ctors ~init:acc ~f:(fun idx acc (ctor_name, _) ->
+          Map.set acc ~key:ctor_name ~data:idx)
+      | _ -> acc)
+  in
   let x, xs =
-    Context.handle (fun () -> Fresh.handle (fun () -> List.map ~f:go sorted_declarations))
+    Context.handle (fun () ->
+      Fresh.handle (fun () ->
+        CtorTags.handle ctor_tags (fun () ->
+          List.map ~f:go sorted_declarations)))
   in
   List.append x xs
 ;;

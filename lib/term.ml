@@ -146,11 +146,37 @@ type ast =
   [ ast base
   | ast term_binders
   | `Pos of Pos.t * ast
-  | `Meta of Meta.t
+  | `Meta of meta
   | `RecordType of ast row
   | `SumType of ast sum_type
   ]
 [@@deriving show, sexp]
+
+(* HOAS encoding *)
+and value =
+  [ value base
+  | `Lam of plicity * Ident.t * (value -> value)
+  | `Pi of plicity * Ident.t * value * (value -> value)
+  | `RecordType of value row
+  | `SumType of value sum_type
+  | `Neutral of neutral
+  | `Opaque
+  ]
+[@@deriving show, sexp]
+
+and neutral =
+  | NVar of int * Ident.t
+  | NApp of neutral * value
+  | NProj of neutral * Ident.t
+  | NMeta of meta
+[@@deriving show, sexp]
+
+and meta =
+  { id : int
+  ; level : int
+  ; mutable solution : value option [@sexp.option]
+  }
+[@@deriving sexp]
 
 let rec desugar : cst -> ast = function
   | `Pos (pos, t) -> `Pos (pos, desugar t)
@@ -248,25 +274,6 @@ end
 (* Convenience wrapper returning list *)
 let free : cst -> Ident.t list = fun term -> Set.to_list (FreeVars.of_cst term)
 
-(* HOAS encoding *)
-type value =
-  [ value base
-  | `Lam of plicity * Ident.t * (value -> value)
-  | `Pi of plicity * Ident.t * value * (value -> value)
-  | `RecordType of value row
-  | `SumType of value sum_type
-  | `Neutral of neutral
-  | `Opaque
-  ]
-[@@deriving show, sexp]
-
-and neutral =
-  | NVar of int * Ident.t
-  | NApp of neutral * value
-  | NProj of neutral * Ident.t
-  | NMeta of Meta.t
-[@@deriving show, sexp]
-
 type 'a declaration =
   | Function of
       { ident : Ident.t
@@ -307,3 +314,47 @@ let desugar_toplevel = function
     and constructors = Map.map constructors ~f:(List.map ~f:desugar) in
     SumDecl { ident; params; constructors; position }
 ;;
+
+module Meta = struct
+  module Id = struct
+    type t = int [@@opaque]
+
+    let equal = Int.equal
+    let compare = Int.compare
+    let hash = Int.hash
+
+    let t_of_sexp : Sexplib.Sexp.t -> t =
+      fun sexp ->
+      let s = Sexplib.Conv.string_of_sexp sexp in
+      if Char.equal s.[0] '?'
+      then int_of_string @@ String.sub s ~pos:1 ~len:(String.length s - 1)
+      else raise (Failure "Invalid Meta.t in sexpr")
+    ;;
+
+    let sexp_of_t : t -> Sexplib.Sexp.t =
+      fun self ->
+      string_of_int self
+      |> String.append (String.make 1 '?')
+      |> Sexplib.Conv.sexp_of_string
+    ;;
+  end
+
+  type t = meta =
+    { id : int
+    ; level : int
+    ; mutable solution : value option [@sexp.option]
+    }
+  [@@deriving sexp]
+
+  let equal a b = Id.equal a.id b.id && Int.equal a.level b.level
+  let show = Fun.compose Sexplib.Sexp.to_string_hum sexp_of_t
+
+  let fresh =
+    let counter = ref (-1) in
+    fun level ->
+      incr counter;
+      { id = !counter; level; solution = None }
+  ;;
+
+  let solve m v = m.solution <- Some v
+end

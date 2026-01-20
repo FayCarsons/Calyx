@@ -2,9 +2,8 @@ open Core
 
 let rec zonk : Term.ast -> Term.ast = function
   | `Meta m ->
-    (match Solve.Solution.solution m with
-     | Some v -> Checker.quote 0 @@ zonk_value v
-     | None -> `Meta m)
+    Option.map m.solution ~f:(Fun.compose (Checker.quote 0) zonk_value)
+    |> Option.value ~default:(`Meta m)
   | `App (f, x) -> `App (zonk f, zonk x)
   | `Lam (plicity, x, body) -> `Lam (plicity, x, zonk body)
   | `Pi { plicity; ident; dom; cod } ->
@@ -36,9 +35,7 @@ and zonk_lit : Term.ast Term.literal -> Term.ast Term.literal =
 
 and zonk_value : Term.value -> Term.value = function
   | `Neutral (NMeta m) ->
-    (match Solve.Solution.solution m with
-     | Some v -> zonk_value v
-     | None -> `Neutral (NMeta m))
+    Option.map m.solution ~f:zonk_value |> Option.value ~default:(`Neutral (Term.NMeta m))
   | `App (f, x) -> `App (zonk_value f, zonk_value x)
   | `Lam (plicity, x, body) -> `Lam (plicity, x, Fun.compose zonk_value body)
   | `Pi (plicity, x, dom, cod) ->
@@ -70,22 +67,19 @@ and zonk_value : Term.value -> Term.value = function
   | t -> t
 ;;
 
-let zonk_toplevel (m : Term.value Meta.gen) (ast : Term.ast Term.declaration)
-  : Term.ast Term.declaration
-  =
+let zonk_toplevel (ast : Term.ast Term.declaration) : Term.ast Term.declaration =
   let open Term in
-  let zonked, _ =
-    Solve.Solution.handle m (fun () ->
-      match ast with
-      | Function { ident; typ; body; position } ->
-        let typ = zonk typ
-        and body = zonk body in
-        Function { ident; typ; body; position }
-      | Constant { ident; typ; body; position } ->
-        let typ = zonk typ
-        and body = zonk body in
-        Constant { ident; typ; body; position }
-      | record -> record)
+  let zonked =
+    match ast with
+    | Function { ident; typ; body; position } ->
+      let typ = zonk typ
+      and body = zonk body in
+      Function { ident; typ; body; position }
+    | Constant { ident; typ; body; position } ->
+      let typ = zonk typ
+      and body = zonk body in
+      Constant { ident; typ; body; position }
+    | record -> record
   in
   zonked
 ;;

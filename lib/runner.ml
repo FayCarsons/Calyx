@@ -52,10 +52,10 @@ let compile (module Backend : Codegen.M) (path : string)
   let desugared = List.map Term.desugar_toplevel toplevels in
   print_endline "Desugared:";
   List.iter print_ast_sexp desugared;
-  let* inferred, solutions = Checker.infer_toplevel desugared in
+  let* inferred = Checker.infer_toplevel desugared in
   print_endline "Inferred:";
   List.iter print_ast_sexp inferred;
-  let zonked = List.map (Zonk.zonk_toplevel solutions) inferred in
+  let zonked = List.map Zonk.zonk_toplevel inferred in
   print_endline "Zonked:";
   List.iter print_ast_sexp zonked;
   let ir = Ir.convert zonked in

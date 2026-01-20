@@ -23,14 +23,22 @@ let rec eval : Term.ast -> Term.value = function
     let dom_val = eval dom in
     (* Capture current environment for lexical scoping *)
     let snapshot = Env.ask () in
-    `Pi (plicity, ident, dom_val, fun v ->
-      Env.with_snapshot (Env.with_binding ident ~value:v ~typ:dom_val snapshot)
-        (fun () -> eval cod))
+    `Pi
+      ( plicity
+      , ident
+      , dom_val
+      , fun v ->
+          Env.with_snapshot
+            (Env.with_binding ident ~value:v ~typ:dom_val snapshot)
+            (fun () -> eval cod) )
   | `Lam (plicity, x, body) ->
     let snapshot = Env.ask () in
-    `Lam (plicity, x, fun v ->
-      Env.with_snapshot (Env.with_binding x ~value:v snapshot)
-        (fun () -> eval body))
+    `Lam
+      ( plicity
+      , x
+      , fun v ->
+          Env.with_snapshot (Env.with_binding x ~value:v snapshot) (fun () -> eval body)
+      )
   | `App (f, x) -> app (eval f) (eval x)
   | `Infix { left; op; right } ->
     let op_val = eval op
@@ -156,7 +164,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     let* _ = Env.local ~f:(Env.with_binding ident ~value) (fun () -> check cod `Type) in
     Ok (`Type, `Pi { plicity; ident; dom; cod })
   | `Lam (plicity, x, body) ->
-    let dom = `Neutral (NMeta (Meta.fresh ())) in
+    let dom = `Neutral (NMeta (Meta.fresh (Env.level ()))) in
     let* body_ty, body = Env.fresh_var x dom (fun _ -> infer body) in
     let ty = `Pi (plicity, x, dom, Fun.const body_ty) in
     Ok (ty, `Ann (`Lam (plicity, x, body), quote 0 ty))
@@ -167,7 +175,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
       match Solve.force tf with
       | `Pi (Implicit, _ident, dom, cod) ->
         (* Insert a meta for implicit argument *)
-        let meta = Meta.fresh () in
+        let meta = Meta.fresh @@ Env.level () in
         let meta_val = `Neutral (NMeta meta) in
         let new_f = `App (f, `Ann (`Meta meta, quote 0 dom)) in
         insert_implicits (cod meta_val) new_f
@@ -178,8 +186,8 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
         Ok (result_ty, `Ann (`App (f, x'), quote 0 result_ty))
       | `Neutral (NMeta _) ->
         (* Unknown function type, create constraints *)
-        let dom = `Neutral (NMeta (Meta.fresh ())) in
-        let cod = `Neutral (NMeta (Meta.fresh ())) in
+        let dom = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
+        let cod = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
         Solve.Constraints.(
           tell @@ Equals (tf, `Pi (Explicit, Intern.underscore, dom, Fun.const cod)));
         let* x' = check x dom in
@@ -206,7 +214,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
       | Some t ->
         let* _ = check t `Type in
         Ok (eval t)
-      | None -> Ok (`Neutral (NMeta (Meta.fresh ())))
+      | None -> Ok (`Neutral (NMeta (Meta.fresh @@ Env.level ())))
     in
     let* value' = check value typ in
     let* body_ty, body =
@@ -323,16 +331,16 @@ and infer_proj : Term.ast -> Ident.t -> (Term.value * Term.ast, CalyxError.t) re
      | None ->
        (match row.tail with
         | Some tail ->
-          let field_type = `Neutral (NMeta (Meta.fresh ())) in
+          let field_type = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
           Solve.Constraints.(tell @@ has_field ~record:tail ~field_name:field ~field_type);
           Ok (field_type, `Proj (annotated, field))
         | None ->
           Error (`NoField (field, Map.to_alist @@ Map.map ~f:Term.show_value row.fields))))
   | `Neutral n ->
-    let field_type = `Neutral (NMeta (Meta.fresh ())) in
+    let field_type = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
     let partial : Term.value =
       let fields = Ident.Map.singleton field field_type
-      and tail = Some (`Neutral (NMeta (Meta.fresh ()))) in
+      and tail = Some (`Neutral (NMeta (Meta.fresh @@ Env.level ()))) in
       `RecordType { fields; tail }
     in
     Solve.Constraints.(tell @@ equals (`Neutral n) partial);
@@ -354,8 +362,8 @@ and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
             , Printf.sprintf "%s\nvs.\n%s" (Term.show_ast term) (Term.show_value expected)
             ))
   | `Lam (plicity, x, body), `Neutral (NMeta _ as m) ->
-    let dom = `Neutral (NMeta (Meta.fresh ())) in
-    let cod = `Neutral (NMeta (Meta.fresh ())) in
+    let dom = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
+    let cod = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
     Solve.Constraints.(tell @@ Equals (`Neutral m, `Pi (plicity, x, dom, Fun.const cod)));
     let* body' = Env.fresh_var x dom (fun _ -> check body cod) in
     Ok (`Lam (plicity, x, body'))
@@ -365,7 +373,7 @@ and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
       | Some t ->
         let* _ = check t `Type in
         Ok (eval t)
-      | None -> Ok (`Neutral (NMeta (Meta.fresh ())))
+      | None -> Ok (`Neutral (NMeta (Meta.fresh @@ Env.level ())))
     in
     let* value = check value vty in
     let value' = eval value in
@@ -401,8 +409,7 @@ and row_extract : Ident.t -> Term.value Ident.Map.t -> (Term.value, CalyxError.t
 ;;
 
 let infer_toplevel
-  :  ast declaration list
-  -> (ast declaration list * Term.value Meta.gen, CalyxError.t list) result
+  : ast declaration list -> (ast declaration list, CalyxError.t list) result
   =
   fun program ->
   let rec go
@@ -544,17 +551,10 @@ let infer_toplevel
              (go rest))
     | [] -> Ok []
   in
-  let result, gen =
-    let meta_gen = Meta.default () in
-    Meta.handle meta_gen (fun () ->
-      Solve.Solution.handle meta_gen (fun () ->
-        let program, constraints = Solve.Constraints.handle (fun () -> go program) in
-        Result.map program ~f:(fun program ->
-          match Solve.solve constraints with
-          | Ok () -> program
-          | Error es ->
-            print_endline (Solve.pretty_solver_error es);
-            raise (Failure "Failed to type program"))))
-  in
-  Result.map result ~f:(Tuple.intoRev gen)
+  let program, constraints = Solve.Constraints.handle (fun () -> go program) in
+  match Solve.solve constraints with
+  | Ok () -> program
+  | Error es ->
+    print_endline (Solve.pretty_solver_error es);
+    raise (Failure "Failed to type program")
 ;;

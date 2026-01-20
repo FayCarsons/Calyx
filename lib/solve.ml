@@ -27,47 +27,12 @@ module Constraints = struct
   include M
 end
 
-module Solution = struct
-  type _ Effect.t +=
-    | Solve : Meta.t * Term.value -> unit Effect.t
-    | Solution : Meta.t -> Term.value option Effect.t
-
-  let solve : Meta.t -> Term.value -> unit = fun m t -> Effect.perform @@ Solve (m, t)
-  let solution : Meta.t -> Term.value option = fun m -> Effect.perform @@ Solution m
-
-  let handle : Term.value Meta.gen -> (unit -> 'a) -> 'a * Term.value Meta.gen =
-    fun m f ->
-    let open Effect.Deep in
-    let result =
-      try_with
-        f
-        ()
-        { effc =
-            (fun (type c) (eff : c Effect.t) ->
-              match eff with
-              | Solve (meta, solution) ->
-                Some
-                  (fun (k : (c, _) continuation) ->
-                    Hashtbl.update m.solutions meta ~f:(Fun.const @@ Some solution);
-                    continue k ())
-              | Solution meta ->
-                Some
-                  (fun (k : (c, _) continuation) ->
-                    let entry = Hashtbl.find m.solutions meta |> Option.join in
-                    continue k entry)
-              | eff ->
-                Some (fun (k : (c, _) continuation) -> continue k (Effect.perform eff)))
-        }
-    in
-    result, m
-  ;;
-end
-
 open Term
+module Meta = Meta
 
 let rec force : value -> value = function
   | `Neutral (NMeta m) as v ->
-    (match Solution.solution m with
+    (match m.Meta.solution with
      | Some solution -> force solution
      | None -> v)
   | `Neutral (NVar (_, ident)) as v ->
@@ -110,9 +75,9 @@ and occurs_lit m = function
 
 let solve_meta (m : Meta.t) (v : value) : (unit, CalyxError.t) result =
   if occurs m v
-  then Error (`Occurs m)
+  then Error (`Occurs (Meta.show m))
   else (
-    Solution.solve m v;
+    Meta.solve m v;
     Ok ())
 ;;
 
@@ -354,7 +319,7 @@ and solve_record : record:value -> field_name:Ident.t -> field_type:value -> boo
             true)))
   | `Neutral (NMeta m) ->
     (* Solve meta to a record type with this field and an open tail *)
-    let fresh_tail = `Neutral (NMeta (Meta.fresh ())) in
+    let fresh_tail = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
     let record_type : Term.value =
       `RecordType
         { fields = Ident.Map.singleton field_name field_type; tail = Some fresh_tail }

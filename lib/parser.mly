@@ -2,7 +2,7 @@
 open Term
 module Constructors = ConstructorSet.M
 
-let make_var (ident : Ident.t) : Term.cst = `Var ident
+let make_var (ident : Ident.t) : cst = `Var ident
 let make_infix left op right = 
   `Infix { left; op = `Var op; right }
 
@@ -27,8 +27,8 @@ let make_infix left op right =
 %token ARROW FAT_ARROW EQUALS COLON COMMA SEMICOLON PIPE BACKSLASH DOT BANG
 %token EOF
 
-%start <Term.cst Term.declaration list> program
-%start <Term.cst> expr_top
+%start <cst declaration list> program
+%start <cst> expr_top
 
 %%
 

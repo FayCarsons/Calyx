@@ -7,7 +7,7 @@ module M = struct
     | `InferLambda
     | `NotFound of Ident.t
     | `NoField of Ident.t * (Ident.t * string) list
-    | `Occurs of Meta.t
+    | `Occurs of string
     | `Parser of string
     | `Todo
     ]

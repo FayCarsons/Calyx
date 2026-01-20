@@ -1,5 +1,5 @@
 
-- [ ] Implicits
+- [ ] Implicits - **Partially Done**
   - We want something similar to Lean or Agda here, implicit function params for type variables
   - Explicit syntax: `def id {a} (x : a) -> a` or `def id {a : Type} (x : a) -> a`
   - Implicit syntax: `def id (x : a) -> a`
@@ -13,13 +13,15 @@
       Produces `Equals (Var x) ?M` where `?M` is the meta representing the `{a}` in `f`.
   - In the future we should add implicit forms that do some accelerated search 
     through a prefix tree of typeclass instances, like `[S : Show a]`
-
+  - 1/20/26: implicits present, need implicit lambdas and elaboration
+- [ ] Better IR
+  - We want some ANF-esque IR so that we can compile more easily, and the output program can be more efficient
+  - Possibly GHC's [first class join points](https://pauldownen.com/publications/pldi17.pdf)
 - [ ] Modularize backend 
   - There should be some module functor which takes a DSL mapping IR to string, 
     identifier replacement map, and standard library 
   - And returns a module with a single 'compile' function of 'toplevel_declaration list -> string'
-
-- [ ] Fix record typing 
+- [x] Fix record typing 
   - Record types may have one of: 
     1. An implicit tail `{ x : Int, y : Int }`
     2. An explicit tail `{ x : Int, y : Int | rest }`
@@ -29,9 +31,8 @@
     - `is_subtype t t = true`
     - `is_subtype { x : Int } { x : Int, y : Int} = true`
     - Other things I'm not thinking of, idk TODO
-
 - [ ] Use Gospel for formal verification
-- [ ] Add sum types
+- [ ] Add sum types - **Partially Done**
   - Difficult for WGSL backend as we cannot cast types of arbitrary value
     so some trickery with `array<u32>` and manual unpacking may be necessary
   - Similar row polymorphism:

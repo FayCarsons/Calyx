@@ -32,9 +32,12 @@ let make_infix left op right =
 
 %%
 
-(* Use Menhir's standard library functions for cleaner grammar *)
+let loc(p) == inner = p; { 
+  let pos = Pos.from_parser start.pos_fname $startpos $endpos in 
+  `Pos (pos, inner)
+}
 
-let program := 
+let program :=
   | decls = list(declaration); EOF; { decls }
 
 let declaration :=
@@ -56,24 +59,28 @@ let def_decl :=
     in
     let body = build_lam params body in
     let typ = build_type params ret in
-    Function { ident; typ; body }
+    let position = (Pos.pos_of_position $startpos, Pos.pos_of_position $endpos) in
+    Function { ident; typ; body; position }
   }
 
 let const_decl := 
   | CONST; ident = IDENT; typ = preceded(COLON, type_expr); 
     EQUALS; body = expr; {
-      Constant { ident; typ; body }
+      let position = (Pos.pos_of_position  $startpos, Pos.pos_of_position $endpos) in
+      Constant { ident; typ; body; position }
     }
 
 let data_decl :=
   | DATA; ident = IDENT; params = type_param*; WHERE; fields = record_type_fields; {
-    let params = Ident.Map.of_alist_exn params in
-    RecordDecl { ident; params; fields }
+    let position = (Pos.pos_of_position  $startpos, Pos.pos_of_position $endpos) 
+    and params = Ident.Map.of_alist_exn params in
+    RecordDecl { ident; params; fields; position }
   }
   | DATA; ident = IDENT; params = type_param*; WHERE; constructors = constructor+; {
-    let constructors = Ident.Map.of_alist_exn constructors
+    let position = (Pos.pos_of_position  $startpos, Pos.pos_of_position $endpos) 
+    and constructors = Ident.Map.of_alist_exn constructors
     and params = Ident.Map.of_alist_exn params in
-    SumDecl { ident; params; constructors }
+SumDecl { ident; params; constructors; position }
   }
 
 let type_param :=
@@ -115,7 +122,7 @@ let type_app :=
   | type_atom
   | f = type_app; arg = type_atom; { `App (f, arg) }
 
-let type_atom :=
+let type_atom ==
   | x = IDENT; { make_var x }
   | TYPE; { `Type }
   | LPAREN; ty = type_expr; RPAREN; { ty }

@@ -229,7 +229,7 @@ module WGSL : M = struct
 
   (* Compile a top-level declaration *)
   let compile_declaration : Ir.declaration -> string = function
-    | Function { ident; args; returns; body } ->
+    | Function { ident; args; returns; body; _ } ->
       let annotation (x, t) = Printf.sprintf "%s: %s" (Intern.lookup x) t in
       let args_str =
         String.concat ~sep:", "
@@ -243,13 +243,13 @@ module WGSL : M = struct
         args_str
         returns
         body
-    | Constant { ident; ty; value } ->
+    | Constant { ident; ty; value; _ } ->
       Printf.sprintf
         "const %s: %s = %s;\n"
         (Intern.lookup ident)
         (compile_type ty)
         (compile_expr value)
-    | RecordType { ident; params = _; fields } ->
+    | RecordType { ident; params = _; fields; _ } ->
       let fields_str =
         Map.to_alist fields
         |> List.map ~f:(fun (field, ty) ->
@@ -392,6 +392,24 @@ module Javascript : M = struct
                         , Intern.underscore
                         , `Var (Intern.intern "Int")
                         , Fun.const (`Var (Intern.intern "Bool")) )) ) ) )
+      ; ( Intern.intern ">"
+        , Env.Typed
+            ( `Lam
+                ( Intern.intern "a"
+                , fun a ->
+                    `Lam
+                      ( Intern.intern "b"
+                      , fun b -> `App (`App (`Var (Intern.intern ">"), a), b) ) )
+            , `Pi
+                ( Explicit
+                , Intern.underscore
+                , `Var (Intern.intern "Int")
+                , Fun.const
+                    (`Pi
+                        ( Explicit
+                        , Intern.underscore
+                        , `Var (Intern.intern "Int")
+                        , Fun.const (`Var (Intern.intern "Bool")) )) ) ) )
       ; ( Intern.intern "print"
         , Env.Typed
             ( `Lam (Intern.intern "a", fun a -> `App (`Var (Intern.intern "print"), a))
@@ -406,7 +424,7 @@ module Javascript : M = struct
   let execute = Some "node"
   let extension = "js"
   let map_types = Ident.Map.empty
-  let native_infix = List.map ~f:Intern.intern [ "+"; "-"; "*"; "/"; "<" ]
+  let native_infix = List.map ~f:Intern.intern [ "+"; "-"; "*"; "/"; "<"; ">" ]
   let var = name
   let int = string_of_int
   let uint n = string_of_int n ^ "u"
@@ -469,23 +487,24 @@ module Javascript : M = struct
       let compiled_fields = Map.map ~f:compile_expr fields in
       record_literal compiled_fields
 
+  and compile_with_bindings (scrut : string) (pat : Ir.pattern) (body : Ir.t) : string =
+    let bindings = compile_pattern_bindings scrut pat in
+    match bindings with
+    | [] -> compile_expr body
+    | _ ->
+      Printf.sprintf
+        "((%s) => %s)(%s)"
+        (String.concat ~sep:", " @@ List.map ~f:fst bindings)
+        (compile_expr body)
+        (String.concat ~sep:", " @@ List.map ~f:snd bindings)
+
   and compile_match (scrut : string) (arms : (Ir.pattern * Ir.t) list) : string =
     match arms with
     | [] -> failwith "Empty match arms"
-    | [ (_, body) ] -> compile_expr body (* Single arm, no condition needed *)
+    | [ (pat, body) ] -> compile_with_bindings scrut pat body
     | (pat, body) :: rest ->
       let cond = compile_pattern_condition scrut pat in
-      let bindings = compile_pattern_bindings scrut pat in
-      let body_expr =
-        match bindings with
-        | [] -> compile_expr body
-        | _ ->
-          Printf.sprintf
-            "((%s) => %s)(%s)"
-            (String.concat ~sep:", " @@ List.map ~f:fst bindings)
-            (compile_expr body)
-            (String.concat ~sep:", " @@ List.map ~f:snd bindings)
-      in
+      let body_expr = compile_with_bindings scrut pat body in
       Printf.sprintf "(%s) ? %s : %s" cond body_expr (compile_match scrut rest)
 
   and compile_pattern_condition (scrut : string) : Ir.pattern -> string = function

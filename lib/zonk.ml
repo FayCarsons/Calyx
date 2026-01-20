@@ -69,14 +69,14 @@ let zonk_toplevel (m : Term.value Meta.gen) (ast : Term.ast Term.declaration)
   let zonked, _ =
     Solve.Solution.handle m (fun () ->
       match ast with
-      | Function { ident; typ; body } ->
+      | Function { ident; typ; body; position } ->
         let typ = zonk typ
         and body = zonk body in
-        Function { ident; typ; body }
-      | Constant { ident; typ; body } ->
+        Function { ident; typ; body; position }
+      | Constant { ident; typ; body; position } ->
         let typ = zonk typ
         and body = zonk body in
-        Constant { ident; typ; body }
+        Constant { ident; typ; body; position }
       | record -> record)
   in
   zonked

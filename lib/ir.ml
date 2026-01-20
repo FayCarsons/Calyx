@@ -72,21 +72,25 @@ type declaration =
       ; args : (Ident.t * ty) list
       ; returns : ty
       ; body : t
+      ; position : Pos.pos * Pos.pos
       }
   | Constant of
       { ident : Ident.t
       ; ty : ty
       ; value : t
+      ; position : Pos.pos * Pos.pos
       }
   | RecordType of
       { ident : Ident.t
       ; params : ty Ident.Map.t
       ; fields : ty Ident.Map.t
+      ; position : Pos.pos * Pos.pos
       }
   | SumType of
       { ident : Ident.t
       ; params : ty Ident.Map.t
       ; constructors : (Ident.t * ty list) list
+      ; position : Pos.pos * Pos.pos
       }
 
 module PrettyIR = struct
@@ -158,7 +162,7 @@ module PrettyIR = struct
   ;;
 
   let declaration : declaration -> string = function
-    | Function { ident; args; returns; body } ->
+    | Function { ident; args; returns; body; _ } ->
       let args =
         List.map
           ~f:(fun (ident, ty) ->
@@ -174,13 +178,13 @@ module PrettyIR = struct
         args
         returns
         body
-    | Constant { ident; ty; value } ->
+    | Constant { ident; ty; value; _ } ->
       Printf.sprintf
         "let %s: %s = %s;\n\n"
         (Ident.Intern.lookup ident)
         (ir_ty ty)
         (ir value)
-    | RecordType { ident; params; fields } ->
+    | RecordType { ident; params; fields; _ } ->
       let params =
         Map.to_alist ~key_order:`Increasing params
         |> List.map ~f:(fun (ident, ty) ->
@@ -194,12 +198,14 @@ module PrettyIR = struct
         |> String.concat ~sep:"\n"
       in
       Printf.sprintf "data %s %s where\n%s\n\n" (Ident.Intern.lookup ident) params fields
-    | SumType { ident; params; constructors } ->
+    | SumType { ident; params; constructors; _ } ->
       let params =
         Map.to_alist ~key_order:`Increasing params
         |> List.map ~f:(fun (ident, ty) ->
           Printf.sprintf "(%s : %s)" (Ident.Intern.lookup ident) (ir_ty ty))
-        |> String.concat ~sep:" "
+        |> function
+        | [] -> " "
+        | xs -> String.concat ~sep:" " xs
       in
       let constructors =
         List.map constructors ~f:(fun (ctor, params) ->
@@ -208,7 +214,7 @@ module PrettyIR = struct
         |> String.concat ~sep:"\n|  "
       in
       Printf.sprintf
-        "data %s %s where\n  %s"
+        "data %s%swhere\n  %s\n\n"
         (Ident.Intern.lookup ident)
         params
         constructors
@@ -231,15 +237,18 @@ module CtorTags = struct
 
   let handle (ctor_tags : int Ident.Map.t) (f : unit -> 'a) : 'a =
     let open Effect.Deep in
-    try_with f () {
-      effc = (fun (type c) (eff : c Effect.t) ->
-        match eff with
-        | Lookup name ->
-          Some (fun (k : (c, _) continuation) ->
-            continue k (Map.find ctor_tags name))
-        | eff ->
-          Some (fun (k : (c, _) continuation) -> continue k (Effect.perform eff)))
-    }
+    try_with
+      f
+      ()
+      { effc =
+          (fun (type c) (eff : c Effect.t) ->
+            match eff with
+            | Lookup name ->
+              Some (fun (k : (c, _) continuation) -> continue k (Map.find ctor_tags name))
+            | eff ->
+              Some (fun (k : (c, _) continuation) -> continue k (Effect.perform eff)))
+      }
+  ;;
 end
 
 (* Shared lambda lifting utilities *)
@@ -315,7 +324,7 @@ and convert_pattern : Term.ast Term.pattern -> pattern = function
 (* Convert a Term.value type to IR type *)
 and convert_type : Term.ast -> ty = function
   | `Var name -> TVar name
-  | `Pi { dom; cod; _ } ->
+  | `Pi { plicity = Explicit; dom; cod; _ } ->
     (* Flatten curried functions: Int -> Int -> Int becomes TFunction { args = [Int; Int]; returns = Int } *)
     let rec collect_args acc = function
       | `Pi Term.{ cod; _ } -> collect_args (convert_type dom :: acc) cod
@@ -323,6 +332,7 @@ and convert_type : Term.ast -> ty = function
     in
     let args, returns = collect_args [ convert_type dom ] cod in
     TFunction { args; returns }
+  | `Pi { plicity = Implicit; cod; _ } -> convert_type cod
   | `App (f, x) ->
     (* For type applications like Maybe Int *)
     TApp (convert_type f, [ convert_type x ])
@@ -355,6 +365,9 @@ and convert_type : Term.ast -> ty = function
 (* Extract parameter types from nested Pi types *)
 and extract_pi_types (pi_type : Term.ast) =
   match pi_type with
+  (* FIXME: We want to erase implicit args, but we can't do this until we 
+     have implicit lambdas so that we can erase at the binder level as well *)
+  (* | `Pi { plicity = Implicit; cod; _ } -> extract_pi_types cod *)
   | `Pi { dom; cod; _ } ->
     let rest_types = extract_pi_types cod in
     convert_type dom :: rest_types
@@ -383,6 +396,7 @@ and convert_lambda_to_function ?(name_prefix = "fn") pi_type first_param body =
       ; args = typed_args
       ; returns = return_type
       ; body = converted_body
+      ; position = Pos.pos_empty, Pos.pos_empty
       }
   in
   Context.tell func_decl;
@@ -392,7 +406,7 @@ and convert_lambda_to_function ?(name_prefix = "fn") pi_type first_param body =
 let convert : Term.ast Term.declaration list -> declaration list =
   fun decls ->
   let go = function
-    | Term.Function { ident; typ; body } ->
+    | Term.Function { ident; typ; body; position } ->
       (* This is a function - use typ (the Pi type) for parameter types *)
       let param_types = extract_pi_types typ in
       let return_type = List.nth_exn param_types (List.length param_types - 1) in
@@ -401,23 +415,23 @@ let convert : Term.ast Term.declaration list -> declaration list =
       let args = List.rev args in
       (* Put back in correct order *)
       let args = List.zip_exn args arg_types in
-      Function { ident; args; returns = return_type; body = converted_body }
-    | Term.Constant { ident; typ; body } ->
+      Function { ident; args; returns = return_type; body = converted_body; position }
+    | Term.Constant { ident; typ; body; position } ->
       (* This is a constant declaration *)
       let value = convert_expr body in
       let ty = convert_type typ in
-      Constant { ident; ty; value }
-    | Term.RecordDecl { ident; params; fields } ->
+      Constant { ident; ty; value; position }
+    | Term.RecordDecl { ident; params; fields; position } ->
       let params = Map.map ~f:convert_type params
       and fields = Map.map ~f:convert_type fields in
-      RecordType { ident; params; fields }
-    | Term.SumDecl { ident; params; constructors } ->
+      RecordType { ident; params; fields; position }
+    | Term.SumDecl { ident; params; constructors; position } ->
       let params = Map.map ~f:convert_type params in
       let constructors =
         Map.to_alist ~key_order:`Increasing constructors
         |> List.map ~f:(fun (name, args) -> name, List.map ~f:convert_type args)
       in
-      SumType { ident; params; constructors }
+      SumType { ident; params; constructors; position }
   in
   let is_decl = function
     | Term.RecordDecl _ | Term.SumDecl _ -> -1
@@ -442,8 +456,7 @@ let convert : Term.ast Term.declaration list -> declaration list =
   let x, xs =
     Context.handle (fun () ->
       Fresh.handle (fun () ->
-        CtorTags.handle ctor_tags (fun () ->
-          List.map ~f:go sorted_declarations)))
+        CtorTags.handle ctor_tags (fun () -> List.map ~f:go sorted_declarations)))
   in
   List.append x xs
 ;;

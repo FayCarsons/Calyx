@@ -1,0 +1,30 @@
+data Nat where
+| Zero
+| Succ Nat
+
+def fromNat (self : Nat) -> Int do 
+  match self with
+  | Zero -> 0
+  | Succ n -> 1 + fromNat n
+  end
+
+def fromInt (n : Int) -> Nat do
+  if n > 0 then Succ (fromInt (n - 1)) else Zero end
+
+def repeat (self : Nat) (f : Nat -> Nat) (x : Nat) -> Nat do
+  match self with
+  | Zero -> x
+  | Succ i -> repeat i f (f x)
+  end
+
+def inc (n : Nat) -> Nat do
+  match n with
+  | Zero -> Succ Zero
+  | Succ next -> Succ n
+  end
+
+def add (a : Nat) (b : Nat) -> Nat do
+  repeat a inc b
+
+def main () -> Int do 
+  fromNat (add (fromInt 5) (fromInt 5))

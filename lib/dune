@@ -2,7 +2,7 @@
 
 (menhir
  (modules parser)
- (flags --dump --cmly --table))
+ (flags --dump --cmly --table --base calyx))
 
 (library
  (public_name calyx)

@@ -23,13 +23,7 @@ type t =
   ; level : int
   }
 
-let default () =
-  { bindings = IdentMap.empty
-  ; pos = { filename = "<TEST>"; line = 0L; col = 0L }
-  ; level = 0
-  }
-;;
-
+let default () = { bindings = IdentMap.empty; pos = Pos.empty; level = 0 }
 let env : t ref = ref @@ default ()
 let init e = env := e
 let ask () = !env
@@ -50,6 +44,8 @@ let lookup_value : Ident.t -> Term.value option = fun ident -> value <$> lookup 
 let lookup_type : Ident.t -> Term.value option =
   fun ident -> Option.bind (lookup ident) ~f:typ
 ;;
+
+let is_bound : Ident.t -> bool = Fun.compose Option.is_some lookup
 
 let pos () =
   let env = ask () in

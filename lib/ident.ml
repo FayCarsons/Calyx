@@ -1,111 +1,137 @@
 open Core
 
-module Ident = struct
-  type t = (int64[@opaque])
+module M = struct
+  module Ident = struct
+    type t = (int64[@opaque])
 
-  let equal = Int64.equal
-  let compare = Int64.compare
-  let hash = Int64.hash
-  let succ : t -> t = Int64.succ
-  let ofInt : int -> t = Int64.of_int
-  let toInt : t -> int = Int64.to_int_exn
+    let equal = Int64.equal
+    let compare = Int64.compare
+    let hash = Int64.hash
+    let succ : t -> t = Int64.succ
+    let ofInt : int -> t = Int64.of_int
+    let toInt : t -> int = Int64.to_int_exn
+  end
+
+  module Intern : sig
+    val intern : string -> Ident.t
+    val lookup : Ident.t -> string
+    val underscore : Ident.t
+  end = struct
+    module Bloom = Bloom.String
+    module Table = Hashtbl.Make (String)
+
+    type t =
+      { bloomFilter : Bloom.t
+      ; stringToIdent : Ident.t Table.t
+      ; identToString : string Vector.t
+      ; mutable counter : Ident.t
+      }
+
+    let add' : t -> string -> Ident.t =
+      fun self key ->
+      let index = self.counter in
+      Hashtbl.add_exn self.stringToIdent ~key ~data:index;
+      Vector.push self.identToString key;
+      Bloom.add self.bloomFilter key;
+      self.counter <- Ident.succ self.counter;
+      assert (Ident.equal (Ident.ofInt @@ Vector.length self.identToString) self.counter);
+      index
+    ;;
+
+    let intern' : t -> string -> Ident.t =
+      fun self s ->
+      if Bloom.member self.bloomFilter s
+      then (
+        match Hashtbl.find self.stringToIdent s with
+        | Some ident -> ident
+        | None -> add' self s)
+      else add' self s
+    ;;
+
+    let lookup' : t -> Ident.t -> string =
+      fun self index ->
+      match Vector.get self.identToString @@ Ident.toInt index with
+      | Some s -> s
+      | None -> failwith "Something has gone horribly wrong"
+    ;;
+
+    let default () =
+      { bloomFilter = Bloom.create ~size:8192 ~numHashes:3
+      ; stringToIdent = Hashtbl.create ~growth_allowed:true ~size:1024 (module String)
+      ; identToString = Vector.create ~capacity:1024 ()
+      ; counter = 0L
+      }
+    ;;
+
+    let _global = default ()
+    let intern : string -> Ident.t = intern' _global
+    let lookup : Ident.t -> string = lookup' _global
+    let underscore = intern "_"
+  end
+
+  include Ident
+
+  let pp (fmt : Format.formatter) self = Format.fprintf fmt "%s" (Intern.lookup self)
+
+  let sexp_of_t : t -> Sexplib.Sexp.t =
+    fun self -> Sexplib.Conv.sexp_of_string (Intern.lookup self)
+  ;;
+
+  let t_of_sexp : Sexplib.Sexp.t -> t =
+    fun sexp -> Intern.intern (Sexplib.Conv.string_of_sexp sexp)
+  ;;
+
+  module Map = struct
+    include Map.Make (struct
+        include Ident
+
+        let sexp_of_t = sexp_of_t
+        let t_of_sexp = t_of_sexp
+      end)
+
+    let pp pp_val fmt m =
+      Format.fprintf fmt "{";
+      Map.iteri m ~f:(fun ~key ~data ->
+        Format.fprintf fmt "%s: %a; " (Intern.lookup key) pp_val data);
+      Format.fprintf fmt "}"
+    ;;
+
+    let show show_val m =
+      Printf.sprintf
+        "{ %s }"
+        (Map.mapi
+           ~f:(fun ~key ~data ->
+             Printf.sprintf "%s = %s" (Intern.lookup key) (show_val data))
+           m
+         |> Map.data
+         |> String.concat ~sep:"\n  ")
+    ;;
+  end
+
+  module TreeSet = struct
+    include Set.Make (struct
+        include Ident
+
+        let sexp_of_t = sexp_of_t
+        let t_of_sexp = t_of_sexp
+      end)
+
+    let pp fmt s =
+      Format.fprintf fmt "{";
+      Set.iter s ~f:(fun elt -> Format.fprintf fmt "%s, " (Intern.lookup elt));
+      Format.fprintf fmt "}"
+    ;;
+
+    let show s =
+      Printf.sprintf
+        "{ %s }"
+        (Set.to_list s |> List.map ~f:Intern.lookup |> String.concat ~sep:", ")
+    ;;
+  end
 end
 
-module Intern : sig
-  val intern : string -> Ident.t
-  val lookup : Ident.t -> string
-  val underscore : Ident.t
-end = struct
-  module Bloom = Bloom.String
-  module Table = Hashtbl.Make (String)
-
-  type t =
-    { bloomFilter : Bloom.t
-    ; stringToIdent : Ident.t Table.t
-    ; identToString : string Vector.t
-    ; mutable counter : Ident.t
-    }
-
-  let add' : t -> string -> Ident.t =
-    fun self key ->
-    let index = self.counter in
-    Hashtbl.add_exn self.stringToIdent ~key ~data:index;
-    Vector.push self.identToString key;
-    Bloom.add self.bloomFilter key;
-    self.counter <- Ident.succ self.counter;
-    assert (Ident.equal (Ident.ofInt @@ Vector.length self.identToString) self.counter);
-    index
-  ;;
-
-  let intern' : t -> string -> Ident.t =
-    fun self s ->
-    if Bloom.member self.bloomFilter s
-    then (
-      match Hashtbl.find self.stringToIdent s with
-      | Some ident -> ident
-      | None -> add' self s)
-    else add' self s
-  ;;
-
-  let lookup' : t -> Ident.t -> string =
-    fun self index ->
-    match Vector.get self.identToString @@ Ident.toInt index with
-    | Some s -> s
-    | None -> failwith "Something has gone horribly wrong"
-  ;;
-
-  let default () =
-    { bloomFilter = Bloom.create ~size:8192 ~numHashes:3
-    ; stringToIdent = Hashtbl.create ~growth_allowed:true ~size:1024 (module String)
-    ; identToString = Vector.create ~capacity:1024 ()
-    ; counter = 0L
-    }
-  ;;
-
-  let _global = default ()
-  let intern : string -> Ident.t = intern' _global
-  let lookup : Ident.t -> string = lookup' _global
-  let underscore = intern "_"
-end
-
-include Ident
-
-let pp (fmt : Format.formatter) self = Format.fprintf fmt "%s" (Intern.lookup self)
-
-let sexp_of_t : t -> Sexplib.Sexp.t =
-  fun self -> Sexplib.Conv.sexp_of_string (Intern.lookup self)
-;;
-
-let t_of_sexp : Sexplib.Sexp.t -> t =
-  fun sexp -> Intern.intern (Sexplib.Conv.string_of_sexp sexp)
-;;
-
-module Map = struct
-  include Map.Make (struct
-      include Ident
-
-      let sexp_of_t = sexp_of_t
-      let t_of_sexp = t_of_sexp
-    end)
-
-  let pp pp_val fmt m =
-    Format.fprintf fmt "{";
-    Map.iteri m ~f:(fun ~key ~data ->
-      Format.fprintf fmt "%s: %a; " (Intern.lookup key) pp_val data);
-    Format.fprintf fmt "}"
-  ;;
-
-  let show show_val m =
-    Printf.sprintf
-      "{ %s }"
-      (Map.mapi
-         ~f:(fun ~key ~data ->
-           Printf.sprintf "%s = %s" (Intern.lookup key) (show_val data))
-         m
-       |> Map.data
-       |> String.concat ~sep:"\n  ")
-  ;;
-end
+module Set = Hash_set.Make (M)
+include M
 
 let%test "intern then lookup returns original string" =
   let id = Intern.intern "hello" in

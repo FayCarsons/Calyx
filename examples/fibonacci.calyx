@@ -3,7 +3,6 @@ def fib (n : Int) -> Int do
     n
   else
     fib (n - 1) + fib (n - 2)
-  end
 
 def main () -> Int do
   fib 20

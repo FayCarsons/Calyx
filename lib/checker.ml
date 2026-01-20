@@ -99,6 +99,16 @@ and pattern : Term.ast Term.pattern -> Term.value Term.pattern = function
   | PLit lit -> PLit (over_literal eval lit)
   | PRec fields -> PRec (List.map ~f:(Tuple.second pattern) fields)
 
+(* Resolve a type to a SumType, looking up neutral variables in the environment *)
+and resolve_sum_type : Term.value -> Term.value Term.sum_type option = function
+  | `SumType s -> Some s
+  | `Neutral (NVar (_, name)) ->
+    (* Look up the name in the environment to find the actual SumType *)
+    (match Env.lookup_value name with
+     | Some (`SumType s) -> Some s
+     | _ -> None)
+  | _ -> None
+
 (* Extract bindings from a pattern given the scrutinee type *)
 and pattern_bindings
   : Term.value Term.pattern -> Term.value -> (Ident.t * Term.value) list
@@ -112,13 +122,13 @@ and pattern_bindings
   | PRec _ -> []
   | PCtor (ctor_name, args) ->
     (* Extract constructor argument types from the scrutinee's sum type *)
-    (match scrut_ty with
-     | `SumType { constructors; _ } ->
+    (match resolve_sum_type scrut_ty with
+     | Some { constructors; _ } ->
        (* If this isn't found in the [constructors] map then something has really gone wrong *)
        Map.find_exn constructors ctor_name
        |> List.map2_exn args ~f:pattern_bindings
        |> List.concat
-     | _ -> [])
+     | None -> [])
 ;;
 
 let rec quote (lvl : int) : Term.value -> Term.ast = function
@@ -237,20 +247,21 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
   | `Pos (p, term) ->
     (* print_endline "infer.Pos"; *)
     Env.local ~f:(Env.with_pos p) (fun () -> infer term)
+  (* FIXME: Something is wrong here *)
   | `Match (scrut, arms) ->
     (* print_endline "infer.Match"; *)
-    let* scrut_ty, scrut' = infer scrut in
+    let* scrut_ty, scrut = infer scrut in
     let infer_arm (pat, body) =
       let val_pat = pattern pat in
       let bindings = pattern_bindings val_pat scrut_ty in
       (* Introduce pattern bindings into environment *)
       Env.local
         ~f:(fun env ->
-          List.fold_left bindings ~init:env ~f:(fun env (ident, typ) ->
-            Env.with_binding ident ~value:(`Neutral (NVar (0, ident))) ~typ env))
+          List.fold_right bindings ~init:env ~f:(fun (ident, typ) ->
+            Env.with_binding ident ~value:(`Neutral (NVar (Env.level (), ident))) ~typ))
         (fun () ->
-           let* body_ty, body' = infer body in
-           Ok ((pat, `Ann (body', quote 0 body_ty)), body_ty))
+           let* body_ty, body = infer body in
+           Ok ((pat, `Ann (body, quote 0 body_ty)), body_ty))
     in
     let* arms_and_types = sequence @@ List.map ~f:infer_arm arms in
     let annotated_arms = List.map ~f:fst arms_and_types in
@@ -262,8 +273,7 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
        List.iter ~f:unify_first rest_types;
        Ok
          ( first_ty
-         , `Ann
-             (`Match (`Ann (scrut', quote 0 scrut_ty), annotated_arms), quote 0 first_ty)
+         , `Ann (`Match (`Ann (scrut, quote 0 scrut_ty), annotated_arms), quote 0 first_ty)
          ))
   | `Lit lit ->
     (* print_endline "infer.Lit"; *)
@@ -455,10 +465,10 @@ let infer_toplevel
       (* Evaluate parameters to get their kinds *)
       let param_list = Map.to_alist ~key_order:`Increasing params in
       let eval_params = List.map param_list ~f:(fun (name, kind) -> name, eval kind) in
-      (* Normalize the terms in the constructors *)
+      (* Evaluate constructor arg types - recursive refs become Neutral(NVar(_, ident))
+         which pattern_bindings resolves via environment lookup *)
       let ctor_types = Map.map constructors ~f:(List.map ~f:eval) in
-      (* The base sum type (unapplied) *)
-      let sum_type : Term.value =
+      let sum_type =
         `SumType
           { ident
           ; params = Ident.Map.of_alist_exn eval_params
@@ -466,85 +476,46 @@ let infer_toplevel
           ; position
           }
       in
-      (* Substitute occurrences of a type parameter name with a value *)
-      let rec subst_param param_name replacement : Term.value -> Term.value = function
-        | `Neutral (NVar (_, name)) when Ident.equal name param_name -> replacement
-        | `Pi (pl, id, dom, cod) ->
-          (* Don't substitute if shadowed *)
-          if Ident.equal id param_name
-          then `Pi (pl, id, subst_param param_name replacement dom, cod)
-          else
-            `Pi
-              ( pl
-              , id
-              , subst_param param_name replacement dom
-              , fun v -> subst_param param_name replacement (cod v) )
-        | `SumType { ident = si; params = sp; constructors = sc; position = spos } ->
-          `SumType
-            { ident = si
-            ; params = Map.map sp ~f:(subst_param param_name replacement)
-            ; constructors =
-                Map.map sc ~f:(List.map ~f:(subst_param param_name replacement))
-            ; position = spos
-            }
-        | `Lam (pl, id, body) ->
-          if Ident.equal id param_name
-          then `Lam (pl, id, body)
-          else `Lam (pl, id, fun v -> subst_param param_name replacement (body v))
-        | `RecordType { fields; tail } ->
-          `RecordType
-            { fields = Map.map fields ~f:(subst_param param_name replacement)
-            ; tail = Option.map tail ~f:(subst_param param_name replacement)
-            }
-        | `Neutral (NApp (n, v)) ->
-          (match subst_param param_name replacement (`Neutral n) with
-           | `Neutral n' -> `Neutral (NApp (n', subst_param param_name replacement v))
-           | other -> app other (subst_param param_name replacement v))
-        | `Neutral (NProj (n, field)) ->
-          (match subst_param param_name replacement (`Neutral n) with
-           | `Neutral n' -> `Neutral (NProj (n', field))
-           | other -> proj field other)
-        | other -> other
-      in
-      (* Build constructor type with proper HOAS substitution *)
-      let build_ctor_type (fields : Term.value list) : Term.value =
-        (* Build the type inside-out: start with innermost and wrap with Pis *)
-        let rec build param_vars remaining_params current_fields =
+      (* Build constructor type using proper HOAS - fields are ASTs, evaluated inside closures *)
+      let build_ctor_type (fields : Term.ast list) : Term.value =
+        let rec build param_vars remaining_params =
           match remaining_params with
           | [] ->
-            (* All params processed, build: field1 -> field2 -> ... -> applied_sum *)
+            (* All params bound in env - now evaluate fields *)
+            let eval_fields = List.map fields ~f:eval in
             let applied =
               List.fold_left param_vars ~init:sum_type ~f:(fun acc var -> app acc var)
             in
-            List.fold_right current_fields ~init:applied ~f:(fun field acc ->
+            List.fold_right eval_fields ~init:applied ~f:(fun field acc ->
               `Pi (Explicit, Ident.Intern.underscore, field, Fun.const acc))
           | (param_name, kind) :: rest_params ->
+            let snapshot = Env.ask () in
             `Pi
               ( Implicit
               , param_name
               , kind
               , fun var ->
-                  (* Substitute this param with var in the fields *)
-                  let new_fields =
-                    List.map current_fields ~f:(subst_param param_name var)
-                  in
-                  build (param_vars @ [ var ]) rest_params new_fields )
+                  Env.with_snapshot
+                    (Env.with_binding param_name ~value:var ~typ:kind snapshot)
+                    (fun () -> build (param_vars @ [ var ]) rest_params) )
         in
-        build [] eval_params fields
+        build [] eval_params
       in
+      (* Build constructor bindings with sum_type in scope for recursive references *)
       let constructor_bindings =
-        Map.to_alist ~key_order:`Increasing ctor_types
-        |> List.map ~f:(fun (ctor, fields) ->
-          let ctor_pi = build_ctor_type fields in
-          ctor, `Opaque, ctor_pi)
+        Env.local ~f:(Env.with_binding ident ~value:sum_type ~typ:`Type) (fun () ->
+          Map.to_alist ~key_order:`Increasing constructors
+          |> List.map ~f:(fun (ctor, fields) ->
+            let ctor_pi = build_ctor_type fields in
+            ctor, `Opaque, ctor_pi))
       in
       let type_binding = ident, sum_type, `Type in
       Env.local
         ~f:(fun env ->
-          List.fold_left
+          List.fold_right
             (type_binding :: constructor_bindings)
             ~init:env
-            ~f:(fun env (ident, value, typ) -> Env.with_binding ident ~value ~typ env))
+            ~f:(fun (ident, value, typ) -> Env.with_binding ident ~value ~typ))
         (fun () ->
            Result.map
              ~f:(List.cons (SumDecl { ident; params; constructors; position }))

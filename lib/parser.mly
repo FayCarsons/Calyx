@@ -159,12 +159,12 @@ let expr_let :=
     }
 
 let expr_if :=
-    | IF; cond = expr; THEN; t = expr; ELSE; f = expr; END; {
+    | IF; cond = expr; THEN; t = expr; ELSE; f = expr; {
       `If (cond, t, f)
     }
 
 let expr_match :=
-  | MATCH; e = expr; WITH; arms = match_arms; END; {
+  | MATCH; e = expr; WITH; arms = match_arms; END?; {
       `Match (e, arms)
     }
 

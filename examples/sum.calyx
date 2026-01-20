@@ -17,4 +17,4 @@ def map {a, b} (self : Maybe a) (f : a -> b) -> Maybe b do
 def succ (x : Int) -> Int do x + 1
 
 def main () -> Int do
-  map succ (fromMaybe 0 (Just 42))
+  fromMaybe 0 (map (Just 0) succ)

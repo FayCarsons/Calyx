@@ -52,10 +52,12 @@ module WGSL : M = struct
       ; ( Intern.intern "+"
         , Env.Typed
             ( `Lam
-                ( Intern.intern "x"
+                ( Explicit
+                , Intern.intern "x"
                 , fun x ->
                     `Lam
-                      ( Intern.intern "y"
+                      ( Explicit
+                      , Intern.intern "y"
                       , fun y -> `App (`App (`Var (Intern.intern "+"), x), y) ) )
             , `Pi
                 ( Explicit
@@ -70,7 +72,8 @@ module WGSL : M = struct
       ; ( Intern.intern "succ"
         , Env.Typed
             ( `Lam
-                ( Intern.intern "x"
+                ( Explicit
+                , Intern.intern "x"
                 , fun x -> `App (`App (`Var (Intern.intern "+"), x), `Lit (Int 1)) )
             , `Pi
                 ( Explicit
@@ -277,10 +280,12 @@ module Javascript : M = struct
       ; ( Intern.intern "+"
         , Env.Typed
             ( `Lam
-                ( Intern.intern "x"
+                ( Explicit
+                , Intern.intern "x"
                 , fun x ->
                     `Lam
-                      ( Intern.intern "y"
+                      ( Explicit
+                      , Intern.intern "y"
                       , fun y -> `App (`App (`Var (Intern.intern "+"), x), y) ) )
             , `Pi
                 ( Explicit
@@ -295,10 +300,12 @@ module Javascript : M = struct
       ; ( Intern.intern "-"
         , Env.Typed
             ( `Lam
-                ( Intern.intern "x"
+                ( Explicit
+                , Intern.intern "x"
                 , fun x ->
                     `Lam
-                      ( Intern.intern "y"
+                      ( Explicit
+                      , Intern.intern "y"
                       , fun y -> `App (`App (`Var (Intern.intern "-"), x), y) ) )
             , `Pi
                 ( Explicit
@@ -313,10 +320,12 @@ module Javascript : M = struct
       ; ( Intern.intern "*"
         , Env.Typed
             ( `Lam
-                ( Intern.intern "x"
+                ( Explicit
+                , Intern.intern "x"
                 , fun x ->
                     `Lam
-                      ( Intern.intern "y"
+                      ( Explicit
+                      , Intern.intern "y"
                       , fun y -> `App (`App (`Var (Intern.intern "*"), x), y) ) )
             , `Pi
                 ( Explicit
@@ -331,10 +340,12 @@ module Javascript : M = struct
       ; ( Intern.intern "/"
         , Env.Typed
             ( `Lam
-                ( Intern.intern "x"
+                ( Explicit
+                , Intern.intern "x"
                 , fun x ->
                     `Lam
-                      ( Intern.intern "y"
+                      ( Explicit
+                      , Intern.intern "y"
                       , fun y -> `App (`App (`Var (Intern.intern "/"), x), y) ) )
             , `Pi
                 ( Explicit
@@ -349,10 +360,12 @@ module Javascript : M = struct
       ; ( Intern.intern "=="
         , Env.Typed
             ( `Lam
-                ( Intern.intern "x"
+                ( Explicit
+                , Intern.intern "x"
                 , fun x ->
                     `Lam
-                      ( Intern.intern "y"
+                      ( Explicit
+                      , Intern.intern "y"
                       , fun y -> `App (`App (`Var (Intern.intern "=="), x), y) ) )
             , `Pi
                 ( Explicit
@@ -367,7 +380,8 @@ module Javascript : M = struct
       ; ( Intern.intern "succ"
         , Env.Typed
             ( `Lam
-                ( Intern.intern "x"
+                ( Explicit
+                , Intern.intern "x"
                 , fun x -> `App (`App (`Var (Intern.intern "+"), x), `Lit (Int 1)) )
             , `Pi
                 ( Explicit
@@ -377,10 +391,12 @@ module Javascript : M = struct
       ; ( Intern.intern "<"
         , Env.Typed
             ( `Lam
-                ( Intern.intern "a"
+                ( Explicit
+                , Intern.intern "a"
                 , fun a ->
                     `Lam
-                      ( Intern.intern "b"
+                      ( Explicit
+                      , Intern.intern "b"
                       , fun b -> `App (`App (`Var (Intern.intern "<"), a), b) ) )
             , `Pi
                 ( Explicit
@@ -395,10 +411,12 @@ module Javascript : M = struct
       ; ( Intern.intern ">"
         , Env.Typed
             ( `Lam
-                ( Intern.intern "a"
+                ( Explicit
+                , Intern.intern "a"
                 , fun a ->
                     `Lam
-                      ( Intern.intern "b"
+                      ( Explicit
+                      , Intern.intern "b"
                       , fun b -> `App (`App (`Var (Intern.intern ">"), a), b) ) )
             , `Pi
                 ( Explicit
@@ -412,7 +430,10 @@ module Javascript : M = struct
                         , Fun.const (`Var (Intern.intern "Bool")) )) ) ) )
       ; ( Intern.intern "print"
         , Env.Typed
-            ( `Lam (Intern.intern "a", fun a -> `App (`Var (Intern.intern "print"), a))
+            ( `Lam
+                ( Explicit
+                , Intern.intern "a"
+                , fun a -> `App (`Var (Intern.intern "print"), a) )
             , `Pi
                 ( Explicit
                 , Intern.underscore

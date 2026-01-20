@@ -85,7 +85,7 @@ let is_annotation : type a. a base -> bool = function
 
 (* ['a term_binders] allows us to abstract over binders, i.e. HOAS for [value] *)
 type 'a term_binders =
-  [ `Lam of Ident.t * 'a
+  [ `Lam of plicity * Ident.t * 'a
   | `Pi of 'a pi
   | `Let of Ident.t * 'a option * 'a * 'a
   ]
@@ -103,7 +103,7 @@ and plicity =
   | Implicit
   | Instance
   | Explicit
-[@@deriving show, sexp, map]
+[@@deriving show, sexp, eq]
 
 type cst =
   [ cst base
@@ -205,7 +205,7 @@ module FreeVars = struct
   ;;
 
   let of_binders (go : 'a -> S.t) : 'a term_binders -> S.t = function
-    | `Lam (x, body) -> Set.remove (go body) x
+    | `Lam (_, x, body) -> Set.remove (go body) x
     | `Pi { ident; dom; cod; _ } -> Set.union (go dom) (Set.remove (go cod) ident)
     | `Let (x, typ, value, body) ->
       S.union_list
@@ -251,7 +251,7 @@ let free : cst -> Ident.t list = fun term -> Set.to_list (FreeVars.of_cst term)
 (* HOAS encoding *)
 type value =
   [ value base
-  | `Lam of Ident.t * (value -> value)
+  | `Lam of plicity * Ident.t * (value -> value)
   | `Pi of plicity * Ident.t * value * (value -> value)
   | `RecordType of value row
   | `SumType of value sum_type

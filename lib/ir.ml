@@ -257,15 +257,25 @@ let rec convert_expr : Term.ast -> t = function
   | `Var v -> Var v
   | `Lit literal -> Lit (convert_literal literal)
   | `App (f, x) ->
+    (* Check if an argument is type-level (its type is Type) and should be erased *)
+    let is_type_arg = function
+      | `Ann (_, `Type) -> true
+      | _ -> false
+    in
     let rec go acc = function
-      | `App (f', x') -> go (convert_expr x' :: acc) f'
+      | `App (f', x') ->
+        (* Skip type-level arguments (implicit type params) *)
+        if is_type_arg x'
+        then go acc f'
+        else go (convert_expr x' :: acc) f'
       | `Var ident -> App (ident, acc)
       | `Ann (x, _) -> go acc x
       | other ->
         failwith
         @@ Printf.sprintf "Illegal term in function position '%s'" (Term.show_ast other)
     in
-    go [ convert_expr x ] f
+    (* Also check the outermost argument *)
+    if is_type_arg x then go [] f else go [ convert_expr x ] f
   | `Infix Term.{ left; op; right } ->
     (match convert_expr op with
      | Var op -> Infix (convert_expr left, op, convert_expr right)
@@ -292,11 +302,10 @@ let rec convert_expr : Term.ast -> t = function
        in
        Match (convert_expr scrut, converted_arms))
   | `Pos (_, tm) -> convert_expr tm
-  | `Ann (`Lam (x, body), pi_type) -> convert_lambda_to_function pi_type x body
+  | `Ann ((`Lam _ as lam), pi_type) -> convert_lambda_to_function pi_type lam
+  (* SAFETY: Should be caught in `Ann `Lam case *)
+  | `Lam _ -> assert false
   | `Ann (x, _type) -> convert_expr x
-  | `Lam (x, body) ->
-    Printf.printf "Lam (%s, %s)" (Ident.Intern.lookup x) (Term.show_ast body);
-    failwith "Fatal!"
   | `Let (ident, Some ty, value, body) ->
     Let (ident, convert_type ty, convert_expr (`Ann (value, ty)), convert_expr body)
   | `Err e ->
@@ -365,9 +374,7 @@ and convert_type : Term.ast -> ty = function
 (* Extract parameter types from nested Pi types *)
 and extract_pi_types (pi_type : Term.ast) =
   match pi_type with
-  (* FIXME: We want to erase implicit args, but we can't do this until we 
-     have implicit lambdas so that we can erase at the binder level as well *)
-  (* | `Pi { plicity = Implicit; cod; _ } -> extract_pi_types cod *)
+  | `Pi { plicity = Implicit; cod; _ } -> extract_pi_types cod
   | `Pi { dom; cod; _ } ->
     let rest_types = extract_pi_types cod in
     convert_type dom :: rest_types
@@ -375,18 +382,20 @@ and extract_pi_types (pi_type : Term.ast) =
 (* Return type *)
 
 (* Collect nested lambda parameters *)
-and collect_lambda_params acc = function
-  | `Ann (`Lam (x, body), _) -> collect_lambda_params (x :: acc) body
-  | `Lam (x, body) -> collect_lambda_params (x :: acc) body
+and collect_lambda_params (acc : Ident.t list) = function
+  | `Ann (term, _) -> collect_lambda_params acc term
+  | `Lam (Term.Implicit, _, body) -> collect_lambda_params acc body
+  | `Lam (Term.Explicit, x, body) -> collect_lambda_params (x :: acc) body
   | other -> acc, convert_expr other
 
 (* Convert a lambda with its Pi type to a lifted function *)
-and convert_lambda_to_function ?(name_prefix = "fn") pi_type first_param body =
+and convert_lambda_to_function : ?name_prefix:string -> Term.ast -> Term.ast -> t =
+  fun ?(name_prefix = "fn") pi_type body ->
   let function_name = Ident.Intern.intern @@ Fresh.get name_prefix in
   let param_types = extract_pi_types pi_type in
   let return_type = List.nth_exn param_types (List.length param_types - 1) in
   let arg_types = List.rev (List.tl_exn (List.rev param_types)) in
-  let args, converted_body = collect_lambda_params [ first_param ] body in
+  let args, converted_body = collect_lambda_params [] body in
   let args = List.rev args in
   (* Put back in correct order *)
   let typed_args = List.zip_exn args arg_types in

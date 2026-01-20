@@ -6,7 +6,7 @@ let rec zonk : Term.ast -> Term.ast = function
      | Some v -> Checker.quote 0 @@ zonk_value v
      | None -> `Meta m)
   | `App (f, x) -> `App (zonk f, zonk x)
-  | `Lam (x, body) -> `Lam (x, zonk body)
+  | `Lam (plicity, x, body) -> `Lam (plicity, x, zonk body)
   | `Pi { plicity; ident; dom; cod } ->
     let dom = zonk dom
     and cod = zonk cod in
@@ -24,6 +24,10 @@ let rec zonk : Term.ast -> Term.ast = function
     let fields = Map.map fields ~f:zonk
     and tail = Option.map tail ~f:zonk in
     `RecordType { fields; tail }
+  | `SumType { ident; params; constructors; position } ->
+    let params = Map.map params ~f:zonk
+    and constructors = Map.map constructors ~f:(List.map ~f:zonk) in
+    `SumType { ident; params; constructors; position }
   | term -> term
 
 (* I can't eta reduce this?? OCaml... *)
@@ -36,7 +40,7 @@ and zonk_value : Term.value -> Term.value = function
      | Some v -> zonk_value v
      | None -> `Neutral (NMeta m))
   | `App (f, x) -> `App (zonk_value f, zonk_value x)
-  | `Lam (x, body) -> `Lam (x, Fun.compose zonk_value body)
+  | `Lam (plicity, x, body) -> `Lam (plicity, x, Fun.compose zonk_value body)
   | `Pi (plicity, x, dom, cod) ->
     `Pi (plicity, x, zonk_value dom, Fun.compose zonk_value cod)
   | `Ann (x, t) -> `Ann (zonk_value x, zonk_value t)
@@ -59,6 +63,10 @@ and zonk_value : Term.value -> Term.value = function
       | other -> other
     in
     `RecordType { fields; tail }
+  | `SumType { ident; params; constructors; position } ->
+    let params = Map.map params ~f:zonk_value
+    and constructors = Map.map constructors ~f:(List.map ~f:zonk_value) in
+    `SumType { ident; params; constructors; position }
   | t -> t
 ;;
 

@@ -11,6 +11,64 @@ let over_literal (f : 'a -> 'b) : 'a Term.literal -> 'b Term.literal = function
   | Record fields -> Record (Map.map ~f fields)
 ;;
 
+(* Substitute an NVar at a specific level with a replacement value *)
+let rec subst_nvar (level : int) (name : Ident.t) (replacement : Term.value)
+  : Term.value -> Term.value
+  = function
+  | `Neutral (NVar (l, n)) when Int.equal l level && Ident.equal n name -> replacement
+  | `Pi (pl, id, dom, cod) ->
+    (* Don't substitute in codomain if shadowed *)
+    if Ident.equal id name
+    then `Pi (pl, id, subst_nvar level name replacement dom, cod)
+    else
+      `Pi
+        ( pl
+        , id
+        , subst_nvar level name replacement dom
+        , fun v -> subst_nvar level name replacement (cod v) )
+  | `Lam (pl, id, body) ->
+    if Ident.equal id name
+    then `Lam (pl, id, body)
+    else `Lam (pl, id, fun v -> subst_nvar level name replacement (body v))
+  | `SumType { ident = si; params = sp; constructors = sc; position = spos } ->
+    `SumType
+      { ident = si
+      ; params = Map.map sp ~f:(subst_nvar level name replacement)
+      ; constructors = Map.map sc ~f:(List.map ~f:(subst_nvar level name replacement))
+      ; position = spos
+      }
+  | `RecordType { fields; tail } ->
+    `RecordType
+      { fields = Map.map fields ~f:(subst_nvar level name replacement)
+      ; tail = Option.map tail ~f:(subst_nvar level name replacement)
+      }
+  | `Neutral (NApp (n, v)) ->
+    let n_subst = subst_nvar level name replacement (`Neutral n) in
+    let v_subst = subst_nvar level name replacement v in
+    (match n_subst with
+     | `Neutral n' -> `Neutral (NApp (n', v_subst))
+     | `Lam (_, _, body) -> body v_subst
+     | other -> failwith @@ Printf.sprintf "Unexpected subst result: %s" (Term.show_value other))
+  | `Neutral (NProj (n, field)) ->
+    (match subst_nvar level name replacement (`Neutral n) with
+     | `Neutral n' -> `Neutral (NProj (n', field))
+     | `RecordType { fields; _ } -> Map.find_exn fields field
+     | `Lit (Record fields) -> Map.find_exn fields field
+     | other -> failwith @@ Printf.sprintf "Projection from non-record after subst: %s" (Term.show_value other))
+  | `Lit lit -> `Lit (over_literal (subst_nvar level name replacement) lit)
+  | `App (f, x) ->
+    let f' = subst_nvar level name replacement f in
+    let x' = subst_nvar level name replacement x in
+    (match f' with
+     | `Lam (_, _, body) -> body x'
+     | _ -> `App (f', x'))
+  | `Match (scrut, arms) ->
+    `Match
+      ( subst_nvar level name replacement scrut
+      , List.map arms ~f:(fun (p, e) -> p, subst_nvar level name replacement e) )
+  | other -> other
+;;
+
 let rec eval : Term.ast -> Term.value = function
   | `Var name ->
     (match Env.lookup_value name with
@@ -20,15 +78,28 @@ let rec eval : Term.ast -> Term.value = function
   | `Ann (e, _) -> eval e
   | `Type -> `Type
   | `Pi { plicity; ident; dom; cod } ->
-    let cod =
-      fun v -> Env.local ~f:(Env.with_binding ident ~value:v) (fun () -> eval cod)
+    let dom_val = eval dom in
+    (* Create a fresh neutral variable at the current level *)
+    let level = Env.level () in
+    let var = `Neutral (NVar (level, ident)) in
+    (* Evaluate codomain with the fresh variable bound *)
+    let cod_val =
+      Env.local
+        ~f:(Fun.compose Env.level_succ (Env.with_binding ident ~value:var ~typ:dom_val))
+        (fun () -> eval cod)
     in
-    `Pi (plicity, ident, eval dom, cod)
-  | `Lam (x, body) ->
-    let body =
-      fun v -> Env.local ~f:(Env.with_binding x ~value:v) (fun () -> eval body)
+    (* The closure substitutes the fresh NVar with the actual argument *)
+    `Pi (plicity, ident, dom_val, fun v -> subst_nvar level ident v cod_val)
+  | `Lam (plicity, x, body) ->
+    (* Same fix for lambdas *)
+    let level = Env.level () in
+    let var = `Neutral (NVar (level, x)) in
+    let body_val =
+      Env.local
+        ~f:(Fun.compose Env.level_succ (Env.with_binding x ~value:var))
+        (fun () -> eval body)
     in
-    `Lam (x, body)
+    `Lam (plicity, x, fun v -> subst_nvar level x v body_val)
   | `App (f, x) -> app (eval f) (eval x)
   | `Infix { left; op; right } ->
     let op_val = eval op
@@ -58,7 +129,8 @@ let rec eval : Term.ast -> Term.value = function
 
 and app f x =
   match f with
-  | `Lam (_, body) -> body x
+  (* TODO: Should differentiate between implicit and explicit app? *)
+  | `Lam (_, _, body) -> body x
   | `Neutral n -> `Neutral (NApp (n, x))
   | `SumType { ident; params; constructors; position } ->
     (* Apply a sum type to a type argument - substitute the first parameter *)
@@ -118,9 +190,9 @@ let rec quote (lvl : int) : Term.value -> Term.ast = function
     (* level shouldn't matter here because [var] is just used to access the body of [cod] *)
     let var = `Neutral (NVar (0, ident)) in
     `Pi { plicity; ident; dom = quote lvl dom; cod = quote (succ lvl) (cod var) }
-  | `Lam (x, b) ->
+  | `Lam (plicity, x, b) ->
     let var = `Neutral (NVar (0, x)) in
-    `Lam (x, quote (succ lvl) (b var))
+    `Lam (plicity, x, quote (succ lvl) (b var))
   | `Lit lit -> `Lit (Term.over_literal (quote lvl) lit)
   | `RecordType { fields; tail } ->
     let fields = Map.map ~f:(quote lvl) fields
@@ -152,26 +224,38 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     let* value = Result.map ~f:eval @@ check dom `Type in
     let* _ = Env.local ~f:(Env.with_binding ident ~value) (fun () -> check cod `Type) in
     Ok (`Type, `Pi { plicity; ident; dom; cod })
-  | `Lam (x, body) ->
+  | `Lam (plicity, x, body) ->
     let dom = `Neutral (NMeta (Meta.fresh ())) in
     let* body_ty, body = Env.fresh_var x dom (fun _ -> infer body) in
-    let ty = `Pi (Explicit, x, dom, Fun.const body_ty) in
-    Ok (ty, `Ann (`Lam (x, body), quote 0 ty))
+    let ty = `Pi (plicity, x, dom, Fun.const body_ty) in
+    Ok (ty, `Ann (`Lam (plicity, x, body), quote 0 ty))
   | `App (f, x) ->
     let* tf, f = infer f in
-    let* dom, cod =
+    (* Insert meta-variables for implicit parameters until we hit an explicit one *)
+    let rec insert_implicits tf f =
       match Solve.force tf with
-      | `Pi (_, _, dom, cod) -> Ok (dom, cod (`Neutral (NVar (0, Intern.underscore))))
+      | `Pi (Implicit, _ident, dom, cod) ->
+        (* Insert a meta for implicit argument *)
+        let meta = Meta.fresh () in
+        let meta_val = `Neutral (NMeta meta) in
+        let new_f = `App (f, `Ann (`Meta meta, quote 0 dom)) in
+        insert_implicits (cod meta_val) new_f
+      | `Pi (Explicit, _, dom, cod) ->
+        (* Normal explicit application *)
+        let* x' = check x dom in
+        let result_ty = cod (`Neutral (NVar (0, Intern.underscore))) in
+        Ok (result_ty, `Ann (`App (f, x'), quote 0 result_ty))
       | `Neutral (NMeta _) ->
+        (* Unknown function type, create constraints *)
         let dom = `Neutral (NMeta (Meta.fresh ())) in
         let cod = `Neutral (NMeta (Meta.fresh ())) in
         Solve.Constraints.(
           tell @@ Equals (tf, `Pi (Explicit, Intern.underscore, dom, Fun.const cod)));
-        Ok (dom, cod)
+        let* x' = check x dom in
+        Ok (cod, `Ann (`App (f, x'), quote 0 cod))
       | otherwise -> Error (`Expected ("function", Term.show_value otherwise))
     in
-    let* x' = check x dom in
-    Ok (cod, `Ann (`App (f, x'), quote 0 cod))
+    insert_implicits tf f
   | `Infix { left; op; right } ->
     (* Treat infix like nested application *)
     let app_expr = `App (`App (op, left), right) in
@@ -327,23 +411,23 @@ and infer_proj : Term.ast -> Ident.t -> (Term.value * Term.ast, CalyxError.t) re
 and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
   fun term expected ->
   match term, expected with
-  | `Lam (x, body), `Pi (Explicit, _, dom, cod) ->
-    let* body' = Env.fresh_var x dom (fun var -> check body (cod var)) in
-    Ok (`Lam (x, body'))
-  | `Lam (x, body), `Pi (Implicit, _, dom, cod) ->
-    (* Handle implicit parameter lambdas *)
-    let* body' = Env.fresh_var x dom (fun var -> check body (cod var)) in
-    Ok (`Lam (x, body'))
-  | `Lam (x, body), `Pi (Instance, _, dom, cod) ->
-    (* Handle instance parameter lambdas *)
-    let* body' = Env.fresh_var x dom (fun var -> check body (cod var)) in
-    Ok (`Lam (x, body'))
-  | `Lam (x, body), `Neutral (NMeta _ as m) ->
+  | `Lam (plicity, x, body), `Pi (plicity', _, dom, cod) ->
+    if Term.equal_plicity plicity plicity'
+    then
+      let* body' = Env.fresh_var x dom (fun var -> check body (cod var)) in
+      Ok (`Lam (plicity, x, body'))
+    else
+      Error
+        (`Expected
+            ( "terms to have matching plicity"
+            , Printf.sprintf "%s\nvs.\n%s" (Term.show_ast term) (Term.show_value expected)
+            ))
+  | `Lam (plicity, x, body), `Neutral (NMeta _ as m) ->
     let dom = `Neutral (NMeta (Meta.fresh ())) in
     let cod = `Neutral (NMeta (Meta.fresh ())) in
-    Solve.Constraints.(tell @@ Equals (`Neutral m, `Pi (Explicit, x, dom, Fun.const cod)));
+    Solve.Constraints.(tell @@ Equals (`Neutral m, `Pi (plicity, x, dom, Fun.const cod)));
     let* body' = Env.fresh_var x dom (fun _ -> check body cod) in
-    Ok (`Lam (x, body'))
+    Ok (`Lam (plicity, x, body'))
   | `Let (ident, ty, value, body), expected ->
     let* vty =
       match ty with
@@ -444,33 +528,71 @@ let infer_toplevel
           ; position
           }
       in
-      (* Build the fully-applied return type: Option a b c ... *)
-      let applied_sum_type =
-        List.fold_left eval_params ~init:sum_type ~f:(fun acc (param_name, _) ->
-          app acc (`Neutral (NVar (0, param_name))))
+      (* Substitute occurrences of a type parameter name with a value *)
+      let rec subst_param param_name replacement : Term.value -> Term.value = function
+        | `Neutral (NVar (_, name)) when Ident.equal name param_name -> replacement
+        | `Pi (pl, id, dom, cod) ->
+          (* Don't substitute if shadowed *)
+          if Ident.equal id param_name
+          then `Pi (pl, id, subst_param param_name replacement dom, cod)
+          else
+            `Pi
+              ( pl
+              , id
+              , subst_param param_name replacement dom
+              , fun v -> subst_param param_name replacement (cod v) )
+        | `SumType { ident = si; params = sp; constructors = sc; position = spos } ->
+          `SumType
+            { ident = si
+            ; params = Map.map sp ~f:(subst_param param_name replacement)
+            ; constructors = Map.map sc ~f:(List.map ~f:(subst_param param_name replacement))
+            ; position = spos
+            }
+        | `Lam (pl, id, body) ->
+          if Ident.equal id param_name
+          then `Lam (pl, id, body)
+          else `Lam (pl, id, fun v -> subst_param param_name replacement (body v))
+        | `RecordType { fields; tail } ->
+          `RecordType
+            { fields = Map.map fields ~f:(subst_param param_name replacement)
+            ; tail = Option.map tail ~f:(subst_param param_name replacement)
+            }
+        | `Neutral (NApp (n, v)) ->
+          (match subst_param param_name replacement (`Neutral n) with
+           | `Neutral n' -> `Neutral (NApp (n', subst_param param_name replacement v))
+           | other -> app other (subst_param param_name replacement v))
+        | `Neutral (NProj (n, field)) ->
+          (match subst_param param_name replacement (`Neutral n) with
+           | `Neutral n' -> `Neutral (NProj (n', field))
+           | other -> proj field other)
+        | other -> other
+      in
+      (* Build constructor type with proper HOAS substitution *)
+      let build_ctor_type (fields : Term.value list) : Term.value =
+        (* Build the type inside-out: start with innermost and wrap with Pis *)
+        let rec build param_vars remaining_params current_fields =
+          match remaining_params with
+          | [] ->
+            (* All params processed, build: field1 -> field2 -> ... -> applied_sum *)
+            let applied =
+              List.fold_left param_vars ~init:sum_type ~f:(fun acc var -> app acc var)
+            in
+            List.fold_right current_fields ~init:applied ~f:(fun field acc ->
+              `Pi (Explicit, Ident.Intern.underscore, field, Fun.const acc))
+          | (param_name, kind) :: rest_params ->
+            `Pi (Implicit, param_name, kind, fun var ->
+              (* Substitute this param with var in the fields *)
+              let new_fields =
+                List.map current_fields ~f:(subst_param param_name var)
+              in
+              build (param_vars @ [ var ]) rest_params new_fields)
+        in
+        build [] eval_params fields
       in
       let constructor_bindings =
         Map.to_alist ~key_order:`Increasing ctor_types
         |> List.map ~f:(fun (ctor, fields) ->
-          (* Build: fields -> applied_sum_type *)
-          let with_fields =
-            List.fold_right fields ~init:applied_sum_type ~f:(fun arg_ty acc ->
-              `Pi (Explicit, Ident.Intern.underscore, arg_ty, Fun.const acc))
-          in
-          (* Wrap with implicit Pis for type parameters: {a} -> {b} -> ... -> fields -> applied_sum_type *)
-          let ctor_pi =
-            List.fold_right
-              eval_params
-              ~init:with_fields
-              ~f:(fun (param_name, kind) acc ->
-                `Pi
-                  ( Implicit
-                  , param_name
-                  , kind
-                    (* Substitute param_name with v in acc - but since we use HOAS,
-                   variables will be looked up from the environment *)
-                  , Fun.const acc ))
-          in
+          let ctor_pi = build_ctor_type fields in
           ctor, `Opaque, ctor_pi)
       in
       let type_binding = ident, sum_type, `Type in

@@ -88,7 +88,7 @@ let rec occurs (m : Meta.t) (v : value) : bool =
   | `Pi (_, _, dom, cod) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     occurs m dom || occurs m (cod var)
-  | `Lam (_, body) ->
+  | `Lam (_, _, body) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     occurs m (body var)
   | `RecordType { fields; tail } ->
@@ -130,11 +130,11 @@ let rec unify : value -> value -> (unit, CalyxError.t) result =
   | `Neutral (NMeta m1), `Neutral (NMeta m2) when Meta.equal m1 m2 -> Ok ()
   | `Neutral (NMeta m), v | v, `Neutral (NMeta m) -> solve_meta m v
   | `Type, `Type -> Ok ()
-  | `Lam (_, body1), `Lam (_, body2) ->
+  | `Lam (_, _, body1), `Lam (_, _, body2) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     Constraints.(tell (body1 var %= body2 var));
     Ok ()
-  | `Lam (_, body), f | f, `Lam (_, body) ->
+  | `Lam (_, _, body), f | f, `Lam (_, _, body) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     let* right = vapp f var in
     Constraints.(tell (body var %= right));
@@ -199,9 +199,7 @@ and unify_record_literals
   else
     Error (`Expected (Ident.Map.show Term.show_value a, Ident.Map.show Term.show_value b))
 
-and unify_sum_types
-  :  value sum_type -> value sum_type -> (unit, CalyxError.t) result
-  =
+and unify_sum_types : value sum_type -> value sum_type -> (unit, CalyxError.t) result =
   fun a b ->
   (* Sum types unify if they have the same name *)
   if Ident.equal a.ident b.ident
@@ -265,7 +263,7 @@ and unify_record_types : value row -> value row -> (unit, CalyxError.t) result =
 and vapp =
   fun f x ->
   match f with
-  | `Lam (_, body) -> Result.return @@ body x
+  | `Lam (_, _, body) -> Result.return @@ body x
   | `Neutral n -> Result.return @@ `Neutral (NApp (n, x))
   | otherwise -> Error (`Expected ("function", Term.show_value otherwise))
 ;;

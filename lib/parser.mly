@@ -50,7 +50,7 @@ let def_decl :=
     let rec build_lam params body =
       match params with
       | [] -> body
-      | (_, x, _) :: rest -> `Lam (x, build_lam rest body)
+      | (plicity, x, _) :: rest -> `Lam (plicity, x, build_lam rest body)
     in
     let rec build_type params ret =
       match params with
@@ -194,7 +194,7 @@ let expr_lambda :=
   | BACKSLASH; params = nonempty_list(IDENT); ARROW; body = expr; {
       let rec build_lam = function
         | [] -> body
-        | x :: xs -> `Lam (x, build_lam xs)
+        | x :: xs -> `Lam (Explicit, x, build_lam xs)
       in
       build_lam params
     }

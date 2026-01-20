@@ -89,10 +89,10 @@ let resolve_expr : traversal -> ast -> ast * traversal =
     | `Pos (p, term) ->
       let term, state = go state term in
       `Pos (p, term), state
-    | `Lam (x, body) ->
+    | `Lam (plicity, x, body) ->
       let new_scope = Set.add scope x in
       let body, state = go { state with scope = new_scope } body in
-      `Lam (x, body), { state with scope }
+      `Lam (plicity, x, body), { state with scope }
     | `Pi { plicity; ident; dom; cod } ->
       let new_scope =
         if Ident.equal ident Ident.Intern.underscore then scope else Set.add scope ident

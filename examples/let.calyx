@@ -1,0 +1,5 @@
+def main () -> Int do 
+  let f = \x -> x + 1 in 
+  let x = 66 in 
+  f x
+

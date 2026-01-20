@@ -34,6 +34,10 @@ let local ~f thunk =
   Fun.protect thunk ~finally:(fun () -> env := old)
 ;;
 
+let with_snapshot : t -> (unit -> 'a) -> 'a =
+  fun snapshot f -> local ~f:(Fun.const snapshot) f
+;;
+
 let lookup ident =
   let env = ask () in
   Map.find env.bindings ident

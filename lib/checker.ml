@@ -11,64 +11,6 @@ let over_literal (f : 'a -> 'b) : 'a Term.literal -> 'b Term.literal = function
   | Record fields -> Record (Map.map ~f fields)
 ;;
 
-(* Substitute an NVar at a specific level with a replacement value *)
-let rec subst_nvar (level : int) (name : Ident.t) (replacement : Term.value)
-  : Term.value -> Term.value
-  = function
-  | `Neutral (NVar (l, n)) when Int.equal l level && Ident.equal n name -> replacement
-  | `Pi (pl, id, dom, cod) ->
-    (* Don't substitute in codomain if shadowed *)
-    if Ident.equal id name
-    then `Pi (pl, id, subst_nvar level name replacement dom, cod)
-    else
-      `Pi
-        ( pl
-        , id
-        , subst_nvar level name replacement dom
-        , fun v -> subst_nvar level name replacement (cod v) )
-  | `Lam (pl, id, body) ->
-    if Ident.equal id name
-    then `Lam (pl, id, body)
-    else `Lam (pl, id, fun v -> subst_nvar level name replacement (body v))
-  | `SumType { ident = si; params = sp; constructors = sc; position = spos } ->
-    `SumType
-      { ident = si
-      ; params = Map.map sp ~f:(subst_nvar level name replacement)
-      ; constructors = Map.map sc ~f:(List.map ~f:(subst_nvar level name replacement))
-      ; position = spos
-      }
-  | `RecordType { fields; tail } ->
-    `RecordType
-      { fields = Map.map fields ~f:(subst_nvar level name replacement)
-      ; tail = Option.map tail ~f:(subst_nvar level name replacement)
-      }
-  | `Neutral (NApp (n, v)) ->
-    let n_subst = subst_nvar level name replacement (`Neutral n) in
-    let v_subst = subst_nvar level name replacement v in
-    (match n_subst with
-     | `Neutral n' -> `Neutral (NApp (n', v_subst))
-     | `Lam (_, _, body) -> body v_subst
-     | other -> failwith @@ Printf.sprintf "Unexpected subst result: %s" (Term.show_value other))
-  | `Neutral (NProj (n, field)) ->
-    (match subst_nvar level name replacement (`Neutral n) with
-     | `Neutral n' -> `Neutral (NProj (n', field))
-     | `RecordType { fields; _ } -> Map.find_exn fields field
-     | `Lit (Record fields) -> Map.find_exn fields field
-     | other -> failwith @@ Printf.sprintf "Projection from non-record after subst: %s" (Term.show_value other))
-  | `Lit lit -> `Lit (over_literal (subst_nvar level name replacement) lit)
-  | `App (f, x) ->
-    let f' = subst_nvar level name replacement f in
-    let x' = subst_nvar level name replacement x in
-    (match f' with
-     | `Lam (_, _, body) -> body x'
-     | _ -> `App (f', x'))
-  | `Match (scrut, arms) ->
-    `Match
-      ( subst_nvar level name replacement scrut
-      , List.map arms ~f:(fun (p, e) -> p, subst_nvar level name replacement e) )
-  | other -> other
-;;
-
 let rec eval : Term.ast -> Term.value = function
   | `Var name ->
     (match Env.lookup_value name with
@@ -79,27 +21,16 @@ let rec eval : Term.ast -> Term.value = function
   | `Type -> `Type
   | `Pi { plicity; ident; dom; cod } ->
     let dom_val = eval dom in
-    (* Create a fresh neutral variable at the current level *)
-    let level = Env.level () in
-    let var = `Neutral (NVar (level, ident)) in
-    (* Evaluate codomain with the fresh variable bound *)
-    let cod_val =
-      Env.local
-        ~f:(Fun.compose Env.level_succ (Env.with_binding ident ~value:var ~typ:dom_val))
-        (fun () -> eval cod)
-    in
-    (* The closure substitutes the fresh NVar with the actual argument *)
-    `Pi (plicity, ident, dom_val, fun v -> subst_nvar level ident v cod_val)
+    (* Capture current environment for lexical scoping *)
+    let snapshot = Env.ask () in
+    `Pi (plicity, ident, dom_val, fun v ->
+      Env.with_snapshot (Env.with_binding ident ~value:v ~typ:dom_val snapshot)
+        (fun () -> eval cod))
   | `Lam (plicity, x, body) ->
-    (* Same fix for lambdas *)
-    let level = Env.level () in
-    let var = `Neutral (NVar (level, x)) in
-    let body_val =
-      Env.local
-        ~f:(Fun.compose Env.level_succ (Env.with_binding x ~value:var))
-        (fun () -> eval body)
-    in
-    `Lam (plicity, x, fun v -> subst_nvar level x v body_val)
+    let snapshot = Env.ask () in
+    `Lam (plicity, x, fun v ->
+      Env.with_snapshot (Env.with_binding x ~value:v snapshot)
+        (fun () -> eval body))
   | `App (f, x) -> app (eval f) (eval x)
   | `Infix { left; op; right } ->
     let op_val = eval op
@@ -545,7 +476,8 @@ let infer_toplevel
           `SumType
             { ident = si
             ; params = Map.map sp ~f:(subst_param param_name replacement)
-            ; constructors = Map.map sc ~f:(List.map ~f:(subst_param param_name replacement))
+            ; constructors =
+                Map.map sc ~f:(List.map ~f:(subst_param param_name replacement))
             ; position = spos
             }
         | `Lam (pl, id, body) ->
@@ -580,12 +512,16 @@ let infer_toplevel
             List.fold_right current_fields ~init:applied ~f:(fun field acc ->
               `Pi (Explicit, Ident.Intern.underscore, field, Fun.const acc))
           | (param_name, kind) :: rest_params ->
-            `Pi (Implicit, param_name, kind, fun var ->
-              (* Substitute this param with var in the fields *)
-              let new_fields =
-                List.map current_fields ~f:(subst_param param_name var)
-              in
-              build (param_vars @ [ var ]) rest_params new_fields)
+            `Pi
+              ( Implicit
+              , param_name
+              , kind
+              , fun var ->
+                  (* Substitute this param with var in the fields *)
+                  let new_fields =
+                    List.map current_fields ~f:(subst_param param_name var)
+                  in
+                  build (param_vars @ [ var ]) rest_params new_fields )
         in
         build [] eval_params fields
       in

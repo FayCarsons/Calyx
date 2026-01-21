@@ -247,7 +247,6 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
   | `Pos (p, term) ->
     (* print_endline "infer.Pos"; *)
     Env.local ~f:(Env.with_pos p) (fun () -> infer term)
-  (* FIXME: Something is wrong here *)
   | `Match (scrut, arms) ->
     (* print_endline "infer.Match"; *)
     let* scrut_ty, scrut = infer scrut in
@@ -364,7 +363,7 @@ and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
     if Term.equal_plicity plicity plicity'
     then
       let* body' = Env.fresh_var x dom (fun var -> check body (cod var)) in
-      Ok (`Lam (plicity, x, body'))
+      Ok (`Ann (`Lam (plicity, x, body'), quote 0 expected))
     else
       Error
         (`Expected
@@ -376,7 +375,7 @@ and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
     let cod = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
     Solve.Constraints.(tell @@ Equals (`Neutral m, `Pi (plicity, x, dom, Fun.const cod)));
     let* body' = Env.fresh_var x dom (fun _ -> check body cod) in
-    Ok (`Lam (plicity, x, body'))
+    Ok (`Ann (`Lam (plicity, x, body'), quote 0 expected))
   | `Let (ident, ty, value, body), expected ->
     let* vty =
       match ty with

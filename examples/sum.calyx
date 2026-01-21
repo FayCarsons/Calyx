@@ -16,4 +16,4 @@ def map {a, b} (self : Maybe a) (f : a -> b) -> Maybe b do
 
 def main () -> Int do
   let succ = \x -> x + 1 in
-  fromMaybe 0 (map (Just 0) succ)
+  fromMaybe 0 (map (Just 0) (\x -> x + 1))

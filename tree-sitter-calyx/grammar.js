@@ -145,14 +145,13 @@ module.exports = grammar({
       'if', field('condition', $._expr),
       'then', field('then', $._expr),
       'else', field('else', $._expr),
-      'end',
     ),
 
-    match_expr: $ => seq(
+    match_expr: $ => prec.right(seq(
       'match', $._expr, 'with',
       repeat1($.match_arm),
-      'end',
-    ),
+      optional('end'),
+    )),
 
     match_arm: $ => seq(optional('|'), $.pattern, '->', $._expr),
 

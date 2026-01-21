@@ -265,9 +265,7 @@ let rec convert_expr : Term.ast -> t = function
     let rec go acc = function
       | `App (f', x') ->
         (* Skip type-level arguments (implicit type params) *)
-        if is_type_arg x'
-        then go acc f'
-        else go (convert_expr x' :: acc) f'
+        if is_type_arg x' then go acc f' else go (convert_expr x' :: acc) f'
       | `Var ident -> App (ident, acc)
       | `Ann (x, _) -> go acc x
       | other ->
@@ -303,7 +301,7 @@ let rec convert_expr : Term.ast -> t = function
        Match (convert_expr scrut, converted_arms))
   | `Pos (_, tm) -> convert_expr tm
   | `Ann ((`Lam _ as lam), pi_type) -> convert_lambda_to_function pi_type lam
-  (* SAFETY: Should be caught in `Ann `Lam case *)
+  (* SAFETY: Should be caught in (`Ann (`Lam _)) case *)
   | `Lam _ -> assert false
   | `Ann (x, _type) -> convert_expr x
   | `Let (ident, Some ty, value, body) ->

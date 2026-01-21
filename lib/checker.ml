@@ -168,7 +168,18 @@ and quote_neutral (lvl : int) : neutral -> Term.ast = function
 let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = function
   | `Var i ->
     let* ty = Env.lookup_type i |> Result.of_option ~error:(`NotFound i) in
-    Ok (ty, `Ann (`Var i, quote 0 ty))
+    (* Insert implicit arguments for variables with implicit Pi types *)
+    let rec insert_var_implicits ty term =
+      match Solve.force ty with
+      | `Pi (Implicit, _ident, dom, cod) ->
+        let meta = Meta.fresh @@ Env.level () in
+        let meta_val = `Neutral (NMeta meta) in
+        let new_term = `App (term, `Ann (`Meta meta, quote 0 dom)) in
+        insert_var_implicits (cod meta_val) new_term
+      | _ -> (ty, term)
+    in
+    let result_ty, annotated_term = insert_var_implicits ty (`Var i) in
+    Ok (result_ty, `Ann (annotated_term, quote 0 result_ty))
   | `Pi { plicity; ident; dom; cod } ->
     let* value = Result.map ~f:eval @@ check dom `Type in
     let* _ = Env.local ~f:(Env.with_binding ident ~value) (fun () -> check cod `Type) in

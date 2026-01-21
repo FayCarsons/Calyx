@@ -37,3 +37,4 @@ tree-sitter-calyx/node_modules/
 tree-sitter-calyx/src/
 tree-sitter-calyx/*.so
 tree-sitter-calyx/package-lock.json
+target/

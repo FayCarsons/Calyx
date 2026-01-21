@@ -117,14 +117,23 @@ let rec unify : value -> value -> (unit, CalyxError.t) result =
     else
       Error
         (`UnificationFailure
-            ( Term.show_neutral (NVar (l_level, l_name))
-            , Term.show_neutral (NVar (r_level, r_name)) ))
+            ( Sexp.to_string_hum @@ Term.sexp_of_neutral (NVar (l_level, l_name))
+            , Sexp.to_string_hum @@ Term.sexp_of_neutral (NVar (r_level, r_name)) ))
   | `Neutral l, `Neutral r -> unify_neutral l r
   | `Lit l, `Lit r -> unify_lit l r
   | `RecordType a, `RecordType b -> unify_record_types a b
   | `SumType a, `SumType b -> unify_sum_types a b
+  (* A neutral variable referring to a sum type by name *)
+  | (`Neutral (NVar (_, name)), `SumType { ident; _ })
+  | (`SumType { ident; _ }, `Neutral (NVar (_, name)))
+    when Ident.equal name ident ->
+    Ok ()
   | `Err _, _ | _, `Err _ -> Ok ()
-  | a, b -> Error (`UnificationFailure (Term.show_value a, Term.show_value b))
+  | a, b ->
+    Error
+      (`UnificationFailure
+          ( Sexp.to_string_hum @@ Term.sexp_of_value a
+          , Sexp.to_string_hum @@ Term.sexp_of_value b ))
 
 and unify_neutral : neutral -> neutral -> (unit, CalyxError.t) result =
   fun l r ->
@@ -138,7 +147,11 @@ and unify_neutral : neutral -> neutral -> (unit, CalyxError.t) result =
   | NProj (tm, field), NProj (tm', field') when Ident.equal field field' ->
     unify_neutral tm tm'
   (* Neutrals mismatch*)
-  | l, r -> Error (`UnificationFailure (Term.show_neutral l, Term.show_neutral r))
+  | l, r ->
+    Error
+      (`UnificationFailure
+          ( Sexp.to_string_hum @@ Term.sexp_of_neutral l
+          , Sexp.to_string_hum @@ Term.sexp_of_neutral r ))
 
 and unify_lit l r =
   match l, r with
@@ -270,19 +283,15 @@ let rec solve (initial : Constraints.t list) : (unit, solver_error) result =
   in
   match next, errors, !progressed with
   | [], [], _ -> Ok ()
-  | [], (_ :: _ as es), _ -> Error (Errors es)
-  | _, _, true -> solve next
+  | _, (_ :: _ as es), _ -> Error (Errors es)
+  | _, [], true -> solve next
   | stuck, errors, false -> Error (Stuck { stuck; errors })
 
 and solve_one = function
   | Equals (a, b) ->
-    (* Printf.printf "SOLVING EQUALS '%s' '%s'\n" (Term.show_value a) (Term.show_value b); *)
     (match unify a b with
-     | Ok () ->
-       (* print_endline "SUCCEEDED"; *)
-       true
+     | Ok () -> true
      | Error e ->
-       (* print_endline "FAILED"; *)
        CalyxError.tell e;
        true)
   | Subtype { sub; super } ->

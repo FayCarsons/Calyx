@@ -5,12 +5,7 @@ data Nat where
 def fromNat (self : Nat) -> Int do 
   match self with
   | Zero -> 0
-  | Succ n ->
-    match n with
-    | Zero -> 1 + 0
-    | Succ r -> 1 + fromNat r
-    end
-  end
+  | Succ n -> 1 + fromNat n
 
 def fromInt (n : Int) -> Nat do
   if n > 0 then Succ (fromInt (n - 1)) else Zero 
@@ -23,7 +18,7 @@ def repeat (self : Nat) (f : Nat -> Nat) (x : Nat) -> Nat do
 def inc (n : Nat) -> Nat do
   match n with
   | Zero -> Succ Zero
-  | Succ next -> Succ n
+  | Succ ignore -> Succ n
 
 def add (a : Nat) (b : Nat) -> Nat do
   repeat a inc b

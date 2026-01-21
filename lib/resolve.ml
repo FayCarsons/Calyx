@@ -1,5 +1,25 @@
 (** This is where we will handle building a dependency graph from and inserting 
     implicit pi terms into the ast pre-inference. 
+
+    For instance, with type Option:
+    ```calyx
+    data Option (a : Type) where 
+    | Some a 
+    | None
+    ```
+
+    `Option` itself is given the signature `Type -> Type`
+    `Some` is given the signature `{a : Type} -> a -> Option a`
+    `None` is given the signature `{a : Type} -> Option a`
+
+    And for functions we add implicit lambdas:
+    ```calyx
+    def map {t, a, b} (m : t a) (f : a -> b) -> t a 
+    ```
+
+    Where some signature is reified as `{t a b : Type} -> t a -> (a -> b) -> t b`,
+    Its body becomes `\{t} {a} {b} m f -> ...` where `{a}` is an 'implicit lambda',
+    a parameter which is inferred and eventually totally erased
 *)
 
 open Term

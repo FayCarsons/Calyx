@@ -1,0 +1,6 @@
+def always {a, b} (fst : a) (snd : b) -> b do snd
+
+def main () -> Int do
+  let id = \x -> x in
+  always (id True) (id 0)
+

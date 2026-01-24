@@ -12,7 +12,7 @@ module type M = sig
   (** Standard library functions for this backend. 
       In the future we should be able to write these as S-expressions with access to compiler internals like 'Opaque' 
   *)
-  val standard_library : Env.entry Ident.Map.t
+  val standard_library : Context.entry Ident.Map.t
 
   (** Type renaming, i.e. WGSL requires we rename 'Int' to 'i32' *)
   val map_types : Ident.t Ident.Map.t
@@ -48,38 +48,45 @@ module WGSL : M = struct
   let standard_library =
     let open Term in
     Ident.Map.of_alist_exn
-      [ Intern.intern "Int", Env.Typed (`Opaque, `Type)
+      [ Intern.intern "Int", Context.Typed (`Opaque, `Type)
       ; ( Intern.intern "+"
-        , Env.Typed
+        , Context.Typed
             ( `Lam
                 ( Explicit
                 , Intern.intern "x"
                 , fun x ->
-                    `Lam
-                      ( Explicit
-                      , Intern.intern "y"
-                      , fun y -> `App (`App (`Var (Intern.intern "+"), x), y) ) )
+                    Result.return
+                    @@ `Lam
+                         ( Explicit
+                         , Intern.intern "y"
+                         , fun y ->
+                             Result.return @@ `App (`App (`Var (Intern.intern "+"), x), y)
+                         ) )
             , `Pi
                 ( Explicit
                 , Intern.underscore
                 , `Var (Intern.intern "Int")
                 , Fun.const
-                    (`Pi
-                        ( Explicit
-                        , Intern.underscore
-                        , `Var (Intern.intern "Int")
-                        , Fun.const (`Var (Intern.intern "Int")) )) ) ) )
+                    (Ok
+                       (`Pi
+                           ( Explicit
+                           , Intern.underscore
+                           , `Var (Intern.intern "Int")
+                           , Fun.const (Ok (`Var (Intern.intern "Int"))) ))
+                     : (value, CalyxError.t) result) ) ) )
       ; ( Intern.intern "succ"
-        , Env.Typed
+        , Context.Typed
             ( `Lam
                 ( Explicit
                 , Intern.intern "x"
-                , fun x -> `App (`App (`Var (Intern.intern "+"), x), `Lit (Int 1)) )
+                , fun x ->
+                    Result.return
+                    @@ `App (`App (`Var (Intern.intern "+"), x), `Lit (Int 1)) )
             , `Pi
                 ( Explicit
                 , Intern.underscore
                 , `Var (Intern.intern "Int")
-                , fun _ -> `Var (Intern.intern "Int") ) ) )
+                , fun _ -> Result.return @@ `Var (Intern.intern "Int") ) ) )
       ]
   ;;
 
@@ -274,171 +281,208 @@ module Javascript : M = struct
   let standard_library =
     let open Term in
     Ident.Map.of_alist_exn
-      [ Intern.intern "Int", Env.Typed (`Opaque, `Type)
-      ; Intern.intern "Bool", Env.Typed (`Opaque, `Type)
-      ; Intern.intern "Unit", Env.Typed (`Opaque, `Type)
+      [ Intern.intern "Int", Context.Typed (`Opaque, `Type)
+      ; Intern.intern "Bool", Context.Typed (`Opaque, `Type)
+      ; Intern.intern "Unit", Context.Typed (`Opaque, `Type)
       ; ( Intern.intern "+"
-        , Env.Typed
+        , Context.Typed
             ( `Lam
                 ( Explicit
                 , Intern.intern "x"
                 , fun x ->
-                    `Lam
-                      ( Explicit
-                      , Intern.intern "y"
-                      , fun y -> `App (`App (`Var (Intern.intern "+"), x), y) ) )
+                    Result.return
+                    @@ `Lam
+                         ( Explicit
+                         , Intern.intern "y"
+                         , fun y ->
+                             Result.return @@ `App (`App (`Var (Intern.intern "+"), x), y)
+                         ) )
             , `Pi
                 ( Explicit
                 , Intern.underscore
                 , `Var (Intern.intern "Int")
                 , Fun.const
-                    (`Pi
-                        ( Explicit
-                        , Intern.underscore
-                        , `Var (Intern.intern "Int")
-                        , Fun.const (`Var (Intern.intern "Int")) )) ) ) )
+                    (Result.return
+                     @@ `Pi
+                          ( Explicit
+                          , Intern.underscore
+                          , `Var (Intern.intern "Int")
+                          , Fun.const (Result.return @@ `Var (Intern.intern "Int")) )
+                     : (value, CalyxError.t) result) ) ) )
       ; ( Intern.intern "-"
-        , Env.Typed
+        , Context.Typed
             ( `Lam
                 ( Explicit
                 , Intern.intern "x"
                 , fun x ->
-                    `Lam
-                      ( Explicit
-                      , Intern.intern "y"
-                      , fun y -> `App (`App (`Var (Intern.intern "-"), x), y) ) )
+                    Result.return
+                    @@ `Lam
+                         ( Explicit
+                         , Intern.intern "y"
+                         , fun y ->
+                             Result.return @@ `App (`App (`Var (Intern.intern "-"), x), y)
+                         ) )
             , `Pi
                 ( Explicit
                 , Intern.underscore
                 , `Var (Intern.intern "Int")
                 , Fun.const
-                    (`Pi
-                        ( Explicit
-                        , Intern.underscore
-                        , `Var (Intern.intern "Int")
-                        , Fun.const (`Var (Intern.intern "Int")) )) ) ) )
+                    (Result.return
+                     @@ `Pi
+                          ( Explicit
+                          , Intern.underscore
+                          , `Var (Intern.intern "Int")
+                          , Fun.const (Result.return @@ `Var (Intern.intern "Int")) )) )
+            ) )
       ; ( Intern.intern "*"
-        , Env.Typed
+        , Context.Typed
             ( `Lam
                 ( Explicit
                 , Intern.intern "x"
                 , fun x ->
-                    `Lam
-                      ( Explicit
-                      , Intern.intern "y"
-                      , fun y -> `App (`App (`Var (Intern.intern "*"), x), y) ) )
+                    Result.return
+                    @@ `Lam
+                         ( Explicit
+                         , Intern.intern "y"
+                         , fun y ->
+                             Result.return @@ `App (`App (`Var (Intern.intern "*"), x), y)
+                         ) )
             , `Pi
                 ( Explicit
                 , Intern.underscore
                 , `Var (Intern.intern "Int")
                 , Fun.const
-                    (`Pi
-                        ( Explicit
-                        , Intern.underscore
-                        , `Var (Intern.intern "Int")
-                        , Fun.const (`Var (Intern.intern "Int")) )) ) ) )
+                    (Result.return
+                     @@ `Pi
+                          ( Explicit
+                          , Intern.underscore
+                          , `Var (Intern.intern "Int")
+                          , Fun.const (Result.return @@ `Var (Intern.intern "Int")) )) )
+            ) )
       ; ( Intern.intern "/"
-        , Env.Typed
+        , Context.Typed
             ( `Lam
                 ( Explicit
                 , Intern.intern "x"
                 , fun x ->
-                    `Lam
-                      ( Explicit
-                      , Intern.intern "y"
-                      , fun y -> `App (`App (`Var (Intern.intern "/"), x), y) ) )
+                    Result.return
+                    @@ `Lam
+                         ( Explicit
+                         , Intern.intern "y"
+                         , fun y ->
+                             Result.return @@ `App (`App (`Var (Intern.intern "/"), x), y)
+                         ) )
             , `Pi
                 ( Explicit
                 , Intern.underscore
                 , `Var (Intern.intern "Int")
                 , Fun.const
-                    (`Pi
-                        ( Explicit
-                        , Intern.underscore
-                        , `Var (Intern.intern "Int")
-                        , Fun.const (`Var (Intern.intern "Int")) )) ) ) )
+                    (Result.return
+                     @@ `Pi
+                          ( Explicit
+                          , Intern.underscore
+                          , `Var (Intern.intern "Int")
+                          , Fun.const (Result.return @@ `Var (Intern.intern "Int")) )) )
+            ) )
       ; ( Intern.intern "=="
-        , Env.Typed
+        , Context.Typed
             ( `Lam
                 ( Explicit
                 , Intern.intern "x"
                 , fun x ->
-                    `Lam
-                      ( Explicit
-                      , Intern.intern "y"
-                      , fun y -> `App (`App (`Var (Intern.intern "=="), x), y) ) )
+                    Result.return
+                    @@ `Lam
+                         ( Explicit
+                         , Intern.intern "y"
+                         , fun y ->
+                             Result.return @@ `App (`App (`Var (Intern.intern "=="), x), y)
+                         ) )
             , `Pi
                 ( Explicit
                 , Intern.underscore
                 , `Var (Intern.intern "Int")
                 , Fun.const
-                    (`Pi
-                        ( Explicit
-                        , Intern.underscore
-                        , `Var (Intern.intern "Int")
-                        , Fun.const (`Var (Intern.intern "Bool")) )) ) ) )
+                    (Result.return
+                     @@ `Pi
+                          ( Explicit
+                          , Intern.underscore
+                          , `Var (Intern.intern "Int")
+                          , Fun.const (Result.return @@ `Var (Intern.intern "Bool")) )) )
+            ) )
       ; ( Intern.intern "succ"
-        , Env.Typed
+        , Context.Typed
             ( `Lam
                 ( Explicit
                 , Intern.intern "x"
-                , fun x -> `App (`App (`Var (Intern.intern "+"), x), `Lit (Int 1)) )
+                , fun x ->
+                    Result.return
+                    @@ `App (`App (`Var (Intern.intern "+"), x), `Lit (Int 1)) )
             , `Pi
                 ( Explicit
                 , Intern.underscore
                 , `Var (Intern.intern "Int")
-                , fun _ -> `Var (Intern.intern "Int") ) ) )
+                , fun _ -> Result.return @@ `Var (Intern.intern "Int") ) ) )
       ; ( Intern.intern "<"
-        , Env.Typed
+        , Context.Typed
             ( `Lam
                 ( Explicit
                 , Intern.intern "a"
                 , fun a ->
-                    `Lam
-                      ( Explicit
-                      , Intern.intern "b"
-                      , fun b -> `App (`App (`Var (Intern.intern "<"), a), b) ) )
+                    Result.return
+                    @@ `Lam
+                         ( Explicit
+                         , Intern.intern "b"
+                         , fun b ->
+                             Result.return @@ `App (`App (`Var (Intern.intern "<"), a), b)
+                         ) )
             , `Pi
                 ( Explicit
                 , Intern.underscore
                 , `Var (Intern.intern "Int")
                 , Fun.const
-                    (`Pi
-                        ( Explicit
-                        , Intern.underscore
-                        , `Var (Intern.intern "Int")
-                        , Fun.const (`Var (Intern.intern "Bool")) )) ) ) )
+                    (Result.return
+                     @@ `Pi
+                          ( Explicit
+                          , Intern.underscore
+                          , `Var (Intern.intern "Int")
+                          , Fun.const (Result.return @@ `Var (Intern.intern "Bool")) )) )
+            ) )
       ; ( Intern.intern ">"
-        , Env.Typed
+        , Context.Typed
             ( `Lam
                 ( Explicit
                 , Intern.intern "a"
                 , fun a ->
-                    `Lam
-                      ( Explicit
-                      , Intern.intern "b"
-                      , fun b -> `App (`App (`Var (Intern.intern ">"), a), b) ) )
+                    Result.return
+                    @@ `Lam
+                         ( Explicit
+                         , Intern.intern "b"
+                         , fun b ->
+                             Result.return @@ `App (`App (`Var (Intern.intern ">"), a), b)
+                         ) )
             , `Pi
                 ( Explicit
                 , Intern.underscore
                 , `Var (Intern.intern "Int")
                 , Fun.const
-                    (`Pi
-                        ( Explicit
-                        , Intern.underscore
-                        , `Var (Intern.intern "Int")
-                        , Fun.const (`Var (Intern.intern "Bool")) )) ) ) )
+                    (Result.return
+                     @@ `Pi
+                          ( Explicit
+                          , Intern.underscore
+                          , `Var (Intern.intern "Int")
+                          , Fun.const (Result.return @@ `Var (Intern.intern "Bool")) )) )
+            ) )
       ; ( Intern.intern "print"
-        , Env.Typed
+        , Context.Typed
             ( `Lam
                 ( Explicit
                 , Intern.intern "a"
-                , fun a -> `App (`Var (Intern.intern "print"), a) )
+                , fun a -> Result.return @@ `App (`Var (Intern.intern "print"), a) )
             , `Pi
                 ( Explicit
                 , Intern.underscore
                 , `Var (Intern.intern "Int")
-                , Fun.const (`Var (Intern.intern "Unit")) ) ) )
+                , Fun.const (Result.return @@ `Var (Intern.intern "Unit")) ) ) )
       ]
   ;;
 

@@ -1,5 +1,3 @@
-open Util
-
 let mkdir path =
   try Unix.mkdir path 0o755 with
   | Unix.Unix_error (Unix.EEXIST, _, _) -> ()
@@ -37,29 +35,34 @@ let print_ast_sexp =
   print_newline
   >> print_endline
   >> Sexplib.Sexp.to_string_hum
-  >> Term.sexp_of_declaration Term.sexp_of_ast
+  >> Term.sexp_of_declaration Term.sexp_of_t
 ;;
 
 let compile (module Backend : Codegen.M) (path : string)
   : (string, CalyxError.t list) result
   =
-  Env.init (Env.from_bindings Backend.standard_library);
-  let contents = In_channel.open_text path |> In_channel.input_all in
-  let* toplevels =
-    try Result.map_error (fun e -> [ `Parser e ]) @@ Parse.run contents with
-    | Lexer.Lexing_error e -> failwith e
-  in
-  let desugared = List.map Term.desugar_toplevel toplevels in
-  print_endline "Desugared:";
-  List.iter print_ast_sexp desugared;
-  let* inferred = Checker.infer_toplevel desugared in
-  print_endline "Inferred:";
-  List.iter print_ast_sexp inferred;
-  let zonked = List.map Zonk.zonk_toplevel inferred in
-  print_endline "Zonked:";
-  List.iter print_ast_sexp zonked;
-  let ir = Ir.convert zonked in
-  print_endline "IR:";
-  List.iter (Fun.compose print_string Ir.PrettyIR.declaration) ir;
-  Result.ok @@ Backend.compile ir
+  Trace.handle_by_logging (fun () ->
+    let result, _ =
+      Context.run
+        (Context.from_bindings Backend.standard_library)
+        (let open Context.Syntax in
+         let contents = In_channel.open_text path |> In_channel.input_all in
+         let* toplevels =
+           Parse.run contents |> Result.map_error (fun e -> `Parser e) |> Context.liftR
+         in
+         let desugared = List.map Term.desugar_toplevel toplevels in
+         print_endline "Desugared:";
+         List.iter print_ast_sexp desugared;
+         let* inferred = Checker.infer_toplevel desugared in
+         print_endline "Inferred:";
+         List.iter print_ast_sexp inferred;
+         let* zonked = Context.traverse ~f:Zonk.zonk_toplevel inferred in
+         print_endline "Zonked:";
+         List.iter print_ast_sexp zonked;
+         let ir = Ir.convert zonked in
+         print_endline "IR:";
+         List.iter (Fun.compose print_string Ir.PrettyIR.declaration) ir;
+         Context.pure @@ Backend.compile ir)
+    in
+    result)
 ;;

@@ -1,11 +1,5 @@
 open Core
 
-let ( let* ) = Result.Let_syntax.( >>= )
-let ( and* ) x f = Core.Result.bind x ~f
-let ( >>= ) x f = Core.Result.bind x ~f
-let ( >>| ) x f = Core.Result.map x ~f
-let ( <$> ) f x = Core.Option.map x ~f
-
 let ( <*> ) f x =
   match f with
   | Some f ->

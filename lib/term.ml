@@ -142,21 +142,20 @@ let tail_opt : record_tail -> Ident.t option = function
   | _ -> None
 ;;
 
-type ast =
-  [ ast base
-  | ast term_binders
-  | `Pos of Pos.t * ast
+type t =
+  [ t base
+  | t term_binders
+  | `Pos of Pos.t * t
   | `Meta of meta
-  | `RecordType of ast row
-  | `SumType of ast sum_type
+  | `RecordType of t row
+  | `SumType of t sum_type
   ]
 [@@deriving show, sexp]
 
-(* HOAS encoding *)
 and value =
   [ value base
-  | `Lam of plicity * Ident.t * (value -> value)
-  | `Pi of plicity * Ident.t * value * (value -> value)
+  | `Lam of plicity * Ident.t * (value -> (value, CalyxError.t) result)
+  | `Pi of plicity * Ident.t * value * (value -> (value, CalyxError.t) result)
   | `RecordType of value row
   | `SumType of value sum_type
   | `Neutral of neutral
@@ -178,7 +177,7 @@ and meta =
   }
 [@@deriving sexp]
 
-let rec desugar : cst -> ast = function
+let rec desugar : cst -> t = function
   | `Pos (pos, t) -> `Pos (pos, desugar t)
   | `Infix inf -> `Infix (map_infix desugar inf)
   | `RecordType { fields; tail = TailClosed } ->
@@ -195,8 +194,8 @@ let rec desugar : cst -> ast = function
     `Match
       ( cond
       , [ PVar (Ident.Intern.intern "True"), t; PVar (Ident.Intern.intern "False"), f ] )
-  | #base as b -> (map_base desugar b :> ast)
-  | #term_binders as binder -> (map_term_binders desugar binder :> ast)
+  | #base as b -> (map_base desugar b :> t)
+  | #term_binders as binder -> (map_term_binders desugar binder :> t)
 ;;
 
 (* Free variable computation - polymorphic helpers over term types *)
@@ -253,7 +252,7 @@ module FreeVars = struct
     | #term_binders as binder -> of_binders of_cst binder
   ;;
 
-  let rec of_ast : ast -> S.t = function
+  let rec of_ast : t -> S.t = function
     | `Pos (_, t) -> of_ast t
     | `Meta _ -> S.empty
     | `RecordType { fields; tail } ->
@@ -344,7 +343,7 @@ module Meta = struct
     ; level : int
     ; mutable solution : value option [@sexp.option]
     }
-  [@@deriving sexp]
+  [@@deriving sexp, make]
 
   let equal a b = Id.equal a.id b.id && Int.equal a.level b.level
   let show = Fun.compose Sexplib.Sexp.to_string_hum sexp_of_t

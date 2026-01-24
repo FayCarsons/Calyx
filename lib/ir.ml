@@ -253,7 +253,7 @@ end
 
 (* Shared lambda lifting utilities *)
 
-let rec convert_expr : Term.ast -> t = function
+let rec convert_expr : Term.t -> t = function
   | `Var v -> Var v
   | `Lit literal -> Lit (convert_literal literal)
   | `App (f, x) ->
@@ -270,7 +270,7 @@ let rec convert_expr : Term.ast -> t = function
       | `Ann (x, _) -> go acc x
       | other ->
         failwith
-        @@ Printf.sprintf "Illegal term in function position '%s'" (Term.show_ast other)
+        @@ Printf.sprintf "Illegal term in function position '%s'" (Term.show other)
     in
     (* Also check the outermost argument *)
     if is_type_arg x then go [] f else go [ convert_expr x ] f
@@ -287,8 +287,10 @@ let rec convert_expr : Term.ast -> t = function
     let open Util in
     (* Special case: if-then-else on True/False *)
     let arms' =
-      Tuple.into
-      <$> Stdlib.List.assoc_opt (Term.PVar (Ident.Intern.intern "True")) arms
+      let open Option.Applicative_infix in
+      Option.map
+        ~f:Tuple.into
+        (Stdlib.List.assoc_opt (Term.PVar (Ident.Intern.intern "True")) arms)
       <*> Stdlib.List.assoc_opt (Term.PVar (Ident.Intern.intern "False")) arms
     in
     (match arms' with
@@ -310,16 +312,16 @@ let rec convert_expr : Term.ast -> t = function
     failwith
     @@ Printf.sprintf "Error '%s' should not make it into codegen" (CalyxError.show e)
   | other ->
-    failwith @@ Printf.sprintf "Illegal term in IR.convert: '%s'" (Term.show_ast other)
+    failwith @@ Printf.sprintf "Illegal term in IR.convert: '%s'" (Term.show other)
 
-and convert_literal : Term.ast Term.literal -> literal = function
+and convert_literal : Term.t Term.literal -> literal = function
   | Term.Int n -> Int n
   | Term.UInt n -> UInt n
   | Term.Float x -> Float x
   | Term.Bool b -> Bool b
   | Term.Record fields -> Record (Map.map ~f:convert_expr fields)
 
-and convert_pattern : Term.ast Term.pattern -> pattern = function
+and convert_pattern : Term.t Term.pattern -> pattern = function
   | Term.PVar x -> PVar x
   | Term.PWild -> PWild
   | Term.PCtor (name, args) ->
@@ -329,7 +331,7 @@ and convert_pattern : Term.ast Term.pattern -> pattern = function
   | Term.PRec _ -> failwith "Record patterns not yet implemented"
 
 (* Convert a Term.value type to IR type *)
-and convert_type : Term.ast -> ty = function
+and convert_type : Term.t -> ty = function
   | `Var name -> TVar name
   | `Pi { plicity = Explicit; dom; cod; _ } ->
     (* Flatten curried functions: Int -> Int -> Int becomes TFunction { args = [Int; Int]; returns = Int } *)
@@ -345,16 +347,16 @@ and convert_type : Term.ast -> ty = function
     TApp (convert_type f, [ convert_type x ])
   | `RecordType Term.{ fields; tail } ->
     let open Term in
-    let rec go (fields : ast Ident.Map.t) : ast option -> ast Ident.Map.t = function
+    let rec go (fields : t Ident.Map.t) : t option -> t Ident.Map.t = function
       | Some (`RecordType { fields = fields'; tail }) ->
-        let fields : ast Ident.Map.t =
+        let fields : t Ident.Map.t =
           Map.merge fields fields' ~f:(fun ~key:_ data ->
             match data with
-            | `Left v | `Right v | `Both (v, _) -> Some (v : ast))
+            | `Left v | `Right v | `Both (v, _) -> Some (v : t))
         in
         go fields tail
       | Some other ->
-        failwith @@ Printf.sprintf "Expected record tail, got %s" (Term.show_ast other)
+        failwith @@ Printf.sprintf "Expected record tail, got %s" (Term.show other)
       | None -> fields
     in
     let fields : ty Ident.Map.t = Map.map ~f:convert_type @@ go fields tail in
@@ -367,10 +369,10 @@ and convert_type : Term.ast -> ty = function
     failwith
     @@ Printf.sprintf
          "Illegal term in type position in Ir.convert_type: '%s'"
-         (Term.show_ast other)
+         (Term.show other)
 
 (* Extract parameter types from nested Pi types *)
-and extract_pi_types (pi_type : Term.ast) =
+and extract_pi_types (pi_type : Term.t) =
   match pi_type with
   | `Pi { plicity = Implicit; cod; _ } -> extract_pi_types cod
   | `Pi { dom; cod; _ } ->
@@ -387,7 +389,7 @@ and collect_lambda_params (acc : Ident.t list) = function
   | other -> acc, convert_expr other
 
 (* Convert a lambda with its Pi type to a lifted function *)
-and convert_lambda_to_function : ?name_prefix:string -> Term.ast -> Term.ast -> t =
+and convert_lambda_to_function : ?name_prefix:string -> Term.t -> Term.t -> t =
   fun ?(name_prefix = "fn") pi_type body ->
   let function_name = Ident.Intern.intern @@ Fresh.get name_prefix in
   let param_types = extract_pi_types pi_type in
@@ -410,7 +412,7 @@ and convert_lambda_to_function : ?name_prefix:string -> Term.ast -> Term.ast -> 
   Var function_name
 ;;
 
-let convert : Term.ast Term.declaration list -> declaration list =
+let convert : Term.t Term.declaration list -> declaration list =
   fun decls ->
   let go = function
     | Term.Function { ident; typ; body; position } ->

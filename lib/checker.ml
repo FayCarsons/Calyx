@@ -1,5 +1,5 @@
 open Core
-open Util
+open Context.Syntax
 open Term
 module Intern = Ident.Intern
 
@@ -11,209 +11,352 @@ let over_literal (f : 'a -> 'b) : 'a Term.literal -> 'b Term.literal = function
   | Record fields -> Record (Map.map ~f fields)
 ;;
 
-let rec eval : Term.ast -> Term.value = function
+let rec eval : Term.t -> Term.value Context.t = function
   | `Var name ->
-    (match Env.lookup_value name with
-     | Some `Opaque -> `Neutral (NVar (0, name))
-     | Some other -> other
-     | None -> `Neutral (NVar (0, name)))
+    Context.lookup_value name
+    >>= (function
+     | Some `Opaque -> Context.pure @@ `Neutral (NVar (0, name))
+     | Some other -> Context.pure other
+     | None -> Context.pure @@ `Neutral (NVar (0, name)))
   | `Ann (e, _) -> eval e
-  | `Type -> `Type
+  | `Type -> Context.pure `Type
   | `Pi { plicity; ident; dom; cod } ->
-    let dom_val = eval dom in
+    let* dom_val = eval dom in
     (* Capture current environment for lexical scoping *)
-    let snapshot = Env.ask () in
-    `Pi
-      ( plicity
-      , ident
-      , dom_val
-      , fun v ->
-          Env.with_snapshot
-            (Env.with_binding ident ~value:v ~typ:dom_val snapshot)
-            (fun () -> eval cod) )
+    let* cod =
+      Context.close ~f:(fun value ->
+        Context.local ~f:(Context.with_binding ident ~value ~typ:dom_val) (eval cod))
+    in
+    Context.pure @@ `Pi (plicity, ident, dom_val, cod)
   | `Lam (plicity, x, body) ->
-    let snapshot = Env.ask () in
-    `Lam
-      ( plicity
-      , x
-      , fun v ->
-          Env.with_snapshot (Env.with_binding x ~value:v snapshot) (fun () -> eval body)
-      )
-  | `App (f, x) -> app (eval f) (eval x)
+    let* body =
+      Context.close ~f:(fun value ->
+        Context.local ~f:(Context.with_binding x ~value) (eval body))
+    in
+    Context.pure @@ `Lam (plicity, x, body)
+  | `App (f, x) ->
+    let* f = eval f in
+    let* x = eval x in
+    app f x
   | `Infix { left; op; right } ->
-    let op_val = eval op
-    and left_val = eval left
-    and right_val = eval right in
-    app (app op_val left_val) right_val
+    let* op_val = eval op in
+    let* left_val = eval left in
+    let* right_val = eval right in
+    app op_val left_val >>= Fun.flip app right_val
   | `Let (ident, Some ty, value, body) ->
-    let typ = eval ty
-    and value = eval value in
-    Env.local ~f:(Env.with_binding ident ~value ~typ) (fun () -> eval body)
+    let* typ = eval ty in
+    let* value = eval value in
+    Context.local ~f:(Context.with_binding ident ~value ~typ) (eval body)
   | `Let (ident, None, value, body) ->
-    let value = eval value in
-    Env.local ~f:(Env.with_binding ident ~value) (fun () -> eval body)
+    let* value = eval value in
+    Context.local ~f:(Context.with_binding ident ~value) (eval body)
   | `Match (scrut, arms) ->
-    `Match (eval scrut, List.map ~f:(Tuple.bimap pattern eval) arms)
-  | `Pos (pos, exp) -> Env.local ~f:(Env.with_pos pos) (fun () -> eval exp)
-  | `Lit lit -> `Lit (over_literal eval lit)
-  | `Meta m -> `Neutral (NMeta m)
-  | `Err e -> `Err e
-  | `RecordType { fields; tail } ->
-    `RecordType { fields = Map.map ~f:eval fields; tail = Option.map tail ~f:eval }
-  | `SumType { ident; params; constructors; position } ->
-    let params = Map.map params ~f:eval
-    and constructors = Map.map constructors ~f:(List.map ~f:eval) in
-    `SumType { ident; params; constructors; position }
-  | `Proj (term, field) -> proj field (eval term)
-
-and app f x =
-  match f with
-  (* TODO: Should differentiate between implicit and explicit app? *)
-  | `Lam (_, _, body) -> body x
-  | `Neutral n -> `Neutral (NApp (n, x))
-  | `SumType { ident; params; constructors; position } ->
-    (* Apply a sum type to a type argument - substitute the first parameter *)
-    (match Map.to_alist ~key_order:`Increasing params with
-     | [] -> failwith "Cannot apply saturated sum type"
-     | (param_name, _) :: rest_params ->
-       (* Substitute param_name with x in the constructors *)
-       let subst_value v =
-         match v with
-         | `Neutral (NVar (_, name)) when Ident.equal name param_name -> x
-         | other -> other
+    let* scrut = eval scrut in
+    let* arms =
+      Context.traverse
+        ~f:(fun (pat, body) ->
+          let* pat = pattern pat in
+          let* body = eval body in
+          Context.pure (pat, body))
+        arms
+    in
+    Context.pure @@ `Match (scrut, arms)
+  | `Pos (pos, exp) -> Context.local ~f:(Context.with_pos pos) (eval exp)
+  | `Lit lit ->
+    (match lit with
+     | Record fields ->
+       let* fields =
+         Context.traverse
+           ~f:(fun (ident, value) ->
+             let* value = eval value in
+             Context.pure (ident, value))
+           (Map.to_alist fields)
        in
-       let constructors = Map.map constructors ~f:(List.map ~f:subst_value) in
-       let params = Ident.Map.of_alist_exn rest_params in
-       `SumType { ident; params; constructors; position })
-  | other -> failwith @@ Printf.sprintf "Apply non-function: '%s'" (Term.show_value other)
+       Context.pure @@ `Lit (Record (Ident.Map.of_alist_exn fields))
+     | Int n -> Context.pure @@ `Lit (Int n)
+     | UInt n -> Context.pure @@ `Lit (UInt n)
+     | Float x -> Context.pure @@ `Lit (Float x)
+     | Bool b -> Context.pure @@ `Lit (Bool b))
+  | `Meta m -> Context.pure @@ `Neutral (NMeta m)
+  | `Err e -> Context.pure @@ `Err e
+  | `RecordType { fields; tail } ->
+    let* fields = Context.traverse_map ~f:eval fields in
+    let* tail : Term.value option =
+      match tail with
+      | Some tail -> Context.map ~f:Option.some @@ eval tail
+      | None -> Context.pure None
+    in
+    Context.pure (`RecordType { fields; tail } : Term.value)
+  | `SumType { ident; params; constructors; position } ->
+    let* params = Context.traverse_map ~f:eval params in
+    let* constructors = Context.traverse_map ~f:(Context.traverse ~f:eval) constructors in
+    Context.pure @@ `SumType { ident; params; constructors; position }
+  | `Proj (term, field) -> eval term >>= proj field
 
-and proj (field : Ident.t) : Term.value -> Term.value = function
-  | `Lit (Record fields) -> Map.find_exn fields field
-  | `Neutral n -> `Neutral (NProj (n, field))
-  | _ -> failwith "Projection from non-record"
+and app : value -> value -> value Context.t =
+  fun f x ->
+  match f with
+  | `Lam (_, _, body) -> Context.liftR @@ (body x : (value, CalyxError.t) result)
+  | `Neutral n -> Context.pure @@ `Neutral (NApp (n, x))
+  | `SumType { ident; params; constructors; position } ->
+    (* Apply a sum type to a type argument
+       For example, Option (a : Type) becomes Type -> Option
+       This is probably not how we want to do this in the longterm but it works right now
+    *)
+    Context.pure
+      (match Map.to_alist ~key_order:`Increasing params with
+       | [] -> assert false
+       | (param, _) :: params ->
+         let subst_value v =
+           match v with
+           | `Neutral (NVar (_, name)) when Ident.equal name param -> x
+           | other -> other
+         in
+         let constructors = Map.map constructors ~f:(List.map ~f:subst_value) in
+         let params = Ident.Map.of_alist_exn params in
+         `SumType { ident; params; constructors; position })
+  | other ->
+    Context.fail @@ `Expected ("Function", Sexp.to_string_hum @@ Term.sexp_of_value other)
 
-and pattern : Term.ast Term.pattern -> Term.value Term.pattern = function
-  | PVar x -> PVar x
-  | PWild -> PWild
-  | PCtor (ctor, args) -> PCtor (ctor, List.map ~f:pattern args)
-  | PLit lit -> PLit (over_literal eval lit)
-  | PRec fields -> PRec (List.map ~f:(Tuple.second pattern) fields)
+and proj (field : Ident.t) : Term.value -> Term.value Context.t = function
+  | `Lit (Record fields) -> Context.pure @@ Map.find_exn fields field
+  | `Neutral n -> Context.pure @@ `Neutral (NProj (n, field))
+  | other ->
+    Context.fail (`Expected ("record", Sexp.to_string_hum @@ Term.sexp_of_value other))
+
+and pattern : Term.t Term.pattern -> Term.value Term.pattern Context.t = function
+  | PVar x -> Context.pure @@ PVar x
+  | PWild -> Context.pure @@ PWild
+  | PCtor (ctor, args) ->
+    let* args = Context.traverse ~f:pattern args in
+    Context.pure @@ PCtor (ctor, args)
+  | PLit lit ->
+    (match lit with
+     | Record fields ->
+       let* fields =
+         Context.traverse
+           ~f:(fun (ident, value) ->
+             let* value = eval value in
+             Context.pure (ident, value))
+           (Map.to_alist fields)
+       in
+       Context.pure @@ PLit (Record (Ident.Map.of_alist_exn fields))
+     | Int n -> Context.pure @@ PLit (Int n)
+     | UInt n -> Context.pure @@ PLit (UInt n)
+     | Float x -> Context.pure @@ PLit (Float x)
+     | Bool b -> Context.pure @@ PLit (Bool b))
+  | PRec fields ->
+    let* fields =
+      Context.traverse
+        ~f:(fun (ident, pat) ->
+          let* pat = pattern pat in
+          Context.pure (ident, pat))
+        fields
+    in
+    Context.pure @@ PRec fields
 
 (* Resolve a type to a SumType, looking up neutral variables in the environment *)
-and resolve_sum_type : Term.value -> Term.value Term.sum_type option = function
-  | `SumType s -> Some s
+and resolve_sum_type : Term.value -> Term.value Term.sum_type option Context.t = function
+  | `SumType s -> Context.pure @@ Some s
   | `Neutral (NVar (_, name)) ->
     (* Look up the name in the environment to find the actual SumType *)
-    (match Env.lookup_value name with
-     | Some (`SumType s) -> Some s
-     | _ -> None)
-  | _ -> None
+    Context.lookup_value name
+    >>= (function
+     | Some (`SumType s) -> Context.pure @@ Some s
+     | _ -> Context.pure @@ None)
+  | _ -> Context.pure @@ None
 
 (* Extract bindings from a pattern given the scrutinee type *)
 and pattern_bindings
-  : Term.value Term.pattern -> Term.value -> (Ident.t * Term.value) list
+  : Term.value Term.pattern -> Term.value -> (Ident.t * Term.value) list Context.t
   =
   fun pat scrut_ty ->
   match pat with
-  | PVar x -> [ x, scrut_ty ]
-  | PWild -> []
-  | PLit _ -> []
-  (* TODO: Record pattern bindings *)
-  | PRec _ -> []
+  | PVar x -> Context.pure [ x, scrut_ty ]
+  | PWild -> Context.pure []
+  (* TODO: Record pattern bindings (also appear inside of [literal]) *)
+  | PLit _ -> Context.pure []
+  | PRec _ -> Context.pure []
   | PCtor (ctor_name, args) ->
     (* Extract constructor argument types from the scrutinee's sum type *)
-    (match resolve_sum_type scrut_ty with
+    resolve_sum_type scrut_ty
+    >>= (function
      | Some { constructors; _ } ->
        (* If this isn't found in the [constructors] map then something has really gone wrong *)
        Map.find_exn constructors ctor_name
-       |> List.map2_exn args ~f:pattern_bindings
-       |> List.concat
-     | None -> [])
+       |> List.zip_exn args
+       |> Context.traverse ~f:(Tuple2.uncurry pattern_bindings)
+       >|= List.concat
+     | None -> Context.pure [])
 ;;
 
-let rec quote (lvl : int) : Term.value -> Term.ast = function
-  | `App (f, x) -> `App (quote lvl f, quote lvl x)
+let rec quote (lvl : int) : Term.value -> Term.t Context.t = function
+  | `App (f, x) ->
+    let* f = quote lvl f in
+    let* x = quote lvl x in
+    Context.pure @@ `App (f, x)
   | `Neutral n -> quote_neutral lvl n
-  | `Type -> `Type
+  | `Type -> Context.pure `Type
   | `Pi (plicity, ident, dom, cod) ->
     (* level shouldn't matter here because [var] is just used to access the body of [cod] *)
-    let var = `Neutral (NVar (0, ident)) in
-    `Pi { plicity; ident; dom = quote lvl dom; cod = quote (succ lvl) (cod var) }
+    let var = `Neutral (NVar (lvl, ident)) in
+    let* dom = quote lvl dom in
+    let* cod = Context.liftR (cod var) >>= quote (succ lvl) in
+    Context.pure @@ `Pi { plicity; ident; dom; cod }
   | `Lam (plicity, x, b) ->
     let var = `Neutral (NVar (0, x)) in
-    `Lam (plicity, x, quote (succ lvl) (b var))
-  | `Lit lit -> `Lit (Term.over_literal (quote lvl) lit)
+    let* body = Context.liftR (b var) >>= quote (succ lvl) in
+    Context.pure @@ `Lam (plicity, x, body)
+  | `Lit lit ->
+    (match lit with
+     | Record fields ->
+       let* fields = Context.traverse_map ~f:(quote lvl) fields in
+       Context.pure @@ `Lit (Record fields)
+     | Int n -> Context.pure @@ `Lit (Int n)
+     | UInt n -> Context.pure @@ `Lit (UInt n)
+     | Float x -> Context.pure @@ `Lit (Float x)
+     | Bool b -> Context.pure @@ `Lit (Bool b))
   | `RecordType { fields; tail } ->
-    let fields = Map.map ~f:(quote lvl) fields
-    and tail = Option.map tail ~f:(quote lvl) in
-    `RecordType { fields; tail }
+    let* fields = Context.traverse_map ~f:(quote lvl) fields in
+    let* tail =
+      match tail with
+      | Some tail -> Context.map ~f:Option.some @@ quote lvl tail
+      | None -> Context.pure None
+    in
+    Context.pure @@ (`RecordType { fields; tail } : Term.t)
   | `SumType { ident; params; constructors; position } ->
-    `SumType
-      { ident
-      ; params = Map.map ~f:(quote lvl) params
-      ; constructors = Map.map ~f:(List.map ~f:(quote lvl)) constructors
-      ; position
-      }
-  | `Err e -> `Err e
+    let* params = Context.traverse_map ~f:(quote lvl) params in
+    let* constructors =
+      Context.traverse_map ~f:(Context.traverse ~f:(quote lvl)) constructors
+    in
+    Context.pure @@ `SumType { ident; params; constructors; position }
+  | `Err e -> Context.pure @@ `Err e
   | `Opaque -> failwith "Cannot quote opaque values, they should not appear here"
-  | #base as b -> (Term.map_base (quote lvl) b :> Term.ast)
+  | `Infix { left; op; right } ->
+    let* left = quote lvl left in
+    let* op = quote lvl op in
+    let* right = quote lvl right in
+    Context.pure @@ `Infix { left; op; right }
+  | `Var i -> Context.pure @@ `Var i
+  | `Match (scrut, arms) ->
+    let* scrut = quote lvl scrut in
+    let* arms =
+      Context.traverse
+        ~f:(fun (ptn, arm) ->
+          let* ptn = quote_pattern lvl ptn in
+          let* arm = quote lvl arm in
+          Context.pure (ptn, arm))
+        arms
+    in
+    Context.pure @@ `Match (scrut, arms)
+  | `Ann (tm, typ) ->
+    let* tm = quote lvl tm in
+    let* typ = quote lvl typ in
+    Context.pure @@ `Ann (tm, typ)
+  | `Proj (tm, field) ->
+    let* tm = quote lvl tm in
+    Context.pure @@ `Proj (tm, field)
 
-and quote_neutral (lvl : int) : neutral -> Term.ast = function
-  | NVar (_, x) -> `Var x
-  | NApp (f, x) -> `App (quote_neutral lvl f, quote lvl x)
-  | NMeta m -> `Meta m
-  | NProj (term, field) -> `Proj (quote_neutral lvl term, field)
+and quote_pattern (lvl : int) : Term.value Term.pattern -> Term.t Term.pattern Context.t
+  = function
+  | PLit (Record fields) ->
+    let* fields = Context.traverse_map ~f:(quote lvl) fields in
+    Context.pure @@ PLit (Record fields)
+  | PLit lit ->
+    Context.pure
+    @@ PLit
+         (match lit with
+          | Int n -> Int n
+          | UInt n -> UInt n
+          | Float x -> Float x
+          | Bool b -> Bool b
+          | _ -> assert false)
+  | PWild -> Context.pure PWild
+  | PCtor (ident, args) ->
+    let* args = Context.traverse ~f:(quote_pattern lvl) args in
+    Context.pure @@ PCtor (ident, args)
+  | PVar ident -> Context.pure @@ PVar ident
+  | PRec _ -> Context.fail `Todo
+
+and quote_neutral (lvl : int) : neutral -> Term.t Context.t = function
+  | NVar (_, x) -> Context.pure @@ `Var x
+  | NApp (f, x) ->
+    let* f = quote_neutral lvl f in
+    let* x = quote lvl x in
+    Context.pure @@ `App (f, x)
+  | NMeta m -> Context.pure @@ `Meta m
+  | NProj (term, field) ->
+    let* term = quote_neutral lvl term in
+    Context.pure @@ `Proj (term, field)
 ;;
 
-let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = function
+let rec infer : Term.t -> (Term.value * Term.t) Context.t = function
   | `Var i ->
-    let* ty = Env.lookup_type i |> Result.of_option ~error:(`NotFound i) in
-    (* Insert implicit arguments for variables with implicit Pi types *)
-    let rec insert_var_implicits ty term =
-      match Solve.force ty with
+    let* ty = Context.lookup_type i >>= Context.liftO_or_fail ~error:(`NotFound i) in
+    (* Create and insert metas for implicit params
+       Something about this being in the 'Var' case feels gross, doing this
+       sort of elaboration here feels wrong
+    *)
+    let rec insert_var_implicits : Term.value -> Term.t -> (Term.value * Term.t) Context.t
+      =
+      fun ty term ->
+      Solve.force ty
+      >>= function
       | `Pi (Implicit, _ident, dom, cod) ->
-        let meta = Meta.fresh @@ Env.level () in
+        let* meta = Context.fresh_meta in
         let meta_val = `Neutral (NMeta meta) in
-        let new_term = `App (term, `Ann (`Meta meta, quote 0 dom)) in
-        insert_var_implicits (cod meta_val) new_term
-      | _ -> (ty, term)
+        let* dom = quote 0 dom in
+        let new_term = `App (term, `Ann (`Meta meta, dom)) in
+        let* cod = Context.liftR (cod meta_val) in
+        insert_var_implicits cod new_term
+      | _ -> Context.pure (ty, term)
     in
-    let result_ty, annotated_term = insert_var_implicits ty (`Var i) in
-    Ok (result_ty, `Ann (annotated_term, quote 0 result_ty))
+    let* result_ty, annotated_term = insert_var_implicits ty (`Var i) in
+    let* typ = quote 0 result_ty in
+    Context.pure (result_ty, `Ann (annotated_term, typ))
   | `Pi { plicity; ident; dom; cod } ->
-    let* value = Result.map ~f:eval @@ check dom `Type in
-    let* _ = Env.local ~f:(Env.with_binding ident ~value) (fun () -> check cod `Type) in
-    Ok (`Type, `Pi { plicity; ident; dom; cod })
+    let* value = check dom `Type >>= eval in
+    let* _ = Context.local ~f:(Context.with_binding ident ~value) (check cod `Type) in
+    Context.pure (`Type, `Pi { plicity; ident; dom; cod })
   | `Lam (plicity, x, body) ->
-    let dom = `Neutral (NMeta (Meta.fresh (Env.level ()))) in
-    let* body_ty, body = Env.fresh_var x dom (fun _ -> infer body) in
-    let ty = `Pi (plicity, x, dom, Fun.const body_ty) in
-    Ok (ty, `Ann (`Lam (plicity, x, body), quote 0 ty))
+    let* meta = Context.fresh_meta in
+    let dom = `Neutral (NMeta meta) in
+    let* body_ty, body = Context.with_var x ~typ:dom ~f:(fun _ -> infer body) in
+    let ty = `Pi (plicity, x, dom, fun _ -> Ok body_ty) in
+    let* quoted = quote 0 ty in
+    Context.pure (ty, `Ann (`Lam (plicity, x, body), quoted))
   | `App (f, x) ->
     let* tf, f = infer f in
-    (* Insert meta-variables for implicit parameters until we hit an explicit one *)
     let rec insert_implicits tf f =
-      match Solve.force tf with
+      let* tf = Solve.force tf in
+      match tf with
       | `Pi (Implicit, _ident, dom, cod) ->
-        (* Insert a meta for implicit argument *)
-        let meta = Meta.fresh @@ Env.level () in
+        let* level = Context.level in
+        let meta = Meta.fresh level in
         let meta_val = `Neutral (NMeta meta) in
-        let new_f = `App (f, `Ann (`Meta meta, quote 0 dom)) in
-        insert_implicits (cod meta_val) new_f
+        let* quoted_dom = quote 0 dom in
+        let new_f = `App (f, `Ann (`Meta meta, quoted_dom)) in
+        let* cod = Context.liftR (cod meta_val) in
+        insert_implicits cod new_f
       | `Pi (Explicit, _, dom, cod) ->
-        (* Normal explicit application *)
         let* x' = check x dom in
-        let result_ty = cod (`Neutral (NVar (0, Intern.underscore))) in
-        Ok (result_ty, `Ann (`App (f, x'), quote 0 result_ty))
+        let* result_ty = Context.liftR (cod (`Neutral (NVar (0, Intern.underscore)))) in
+        let* quoted_ty = quote 0 result_ty in
+        Context.pure (result_ty, `Ann (`App (f, x'), quoted_ty))
       | `Neutral (NMeta _) ->
-        (* Unknown function type, create constraints *)
-        let dom = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
-        let cod = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
-        Solve.Constraints.(
-          tell @@ Equals (tf, `Pi (Explicit, Intern.underscore, dom, Fun.const cod)));
+        let* level = Context.level in
+        let dom = `Neutral (NMeta (Meta.fresh level)) in
+        let cod = `Neutral (NMeta (Meta.fresh level)) in
+        let* _ =
+          Context.tell_constraint
+            (Constraint.equals
+               tf
+               (`Pi (Explicit, Intern.underscore, dom, fun _ -> Ok cod)))
+        in
         let* x' = check x dom in
-        Ok (cod, `Ann (`App (f, x'), quote 0 cod))
-      | otherwise -> Error (`Expected ("function", Term.show_value otherwise))
+        let* quoted_cod = quote 0 cod in
+        Context.pure (cod, `Ann (`App (f, x'), quoted_cod))
+      | otherwise -> Context.fail (`Expected ("function", Term.show_value otherwise))
     in
     insert_implicits tf f
   | `Infix { left; op; right } ->
@@ -223,199 +366,232 @@ let rec infer : Term.ast -> (Term.value * Term.ast, CalyxError.t) result = funct
     (match checked_app with
      | `Ann (`App (`App (op, left), right), result_ty) ->
        let infix_expr = `Infix { left; op; right } in
-       Ok (ty, `Ann (infix_expr, result_ty))
+       Context.pure (ty, `Ann (infix_expr, result_ty))
      | _ ->
        let* _, left = infer left in
        let* _, op = infer op in
        let* _, right = infer right in
-       Ok (ty, `Infix { left; op; right }))
+       Context.pure (ty, `Infix { left; op; right }))
   | `Let (ident, typ, value, body) ->
     let* typ =
       match typ with
       | Some t ->
         let* _ = check t `Type in
-        Ok (eval t)
-      | None -> Ok (`Neutral (NMeta (Meta.fresh @@ Env.level ())))
+        eval t
+      | None ->
+        let* meta = Context.fresh_meta in
+        Context.pure @@ `Neutral (NMeta meta)
     in
     let* value' = check value typ in
+    let* value'' = eval value' in
     let* body_ty, body =
-      Env.local
-        ~f:(Env.with_binding ident ~value:(eval value') ~typ)
-        (fun () -> infer body)
+      Context.local ~f:(Context.with_binding ident ~value:value'' ~typ) (infer body)
     in
-    Ok (body_ty, `Ann (`Let (ident, Some (quote 0 typ), value', body), quote 0 body_ty))
+    let* typ = quote 0 typ in
+    let* body_typ = quote 0 body_ty in
+    Context.pure (body_ty, `Ann (`Let (ident, Some typ, value', body), body_typ))
   | `Ann (e, a) ->
     let* _ = check a `Type in
-    let vt = eval a in
+    let* vt = eval a in
     let* e = check e vt in
-    Ok (vt, `Ann (e, a))
+    Context.pure (vt, `Ann (e, a))
   | `Type ->
     (* print_endline "infer.Type"; *)
-    Ok (`Type, `Type)
+    Context.pure (`Type, `Type)
   | `Proj (term, field) ->
     (* print_endline "infer.Proj"; *)
     infer_proj term field
   | `Pos (p, term) ->
     (* print_endline "infer.Pos"; *)
-    Env.local ~f:(Env.with_pos p) (fun () -> infer term)
+    Context.local ~f:(Context.with_pos p) (infer term)
   | `Match (scrut, arms) ->
     (* print_endline "infer.Match"; *)
     let* scrut_ty, scrut = infer scrut in
     let infer_arm (pat, body) =
-      let val_pat = pattern pat in
-      let bindings = pattern_bindings val_pat scrut_ty in
+      let* val_pat = pattern pat in
+      let* bindings = pattern_bindings val_pat scrut_ty in
+      let* level = Context.level in
       (* Introduce pattern bindings into environment *)
-      Env.local
-        ~f:(fun env ->
-          List.fold_right bindings ~init:env ~f:(fun (ident, typ) ->
-            Env.with_binding ident ~value:(`Neutral (NVar (Env.level (), ident))) ~typ))
-        (fun () ->
-           let* body_ty, body = infer body in
-           Ok ((pat, `Ann (body, quote 0 body_ty)), body_ty))
+      Context.local
+        ~f:(fun ctx ->
+          List.fold_right bindings ~init:ctx ~f:(fun (ident, typ) ctx ->
+            Context.with_binding ident ~value:(`Neutral (NVar (level, ident))) ~typ ctx))
+        (let* body_ty, body = infer body in
+         let* body_ty' = quote 0 body_ty in
+         Context.pure ((pat, `Ann (body, body_ty')), body_ty))
     in
-    let* arms_and_types = sequence @@ List.map ~f:infer_arm arms in
+    let* arms_and_types = Context.traverse ~f:infer_arm arms in
     let annotated_arms = List.map ~f:fst arms_and_types in
     let arm_types = List.map ~f:snd arms_and_types in
     (match arm_types with
-     | [] -> Error (`Expected ("non-empty match", Term.show_ast (`Match (scrut, arms))))
+     | [] ->
+       Context.fail (`Expected ("non-empty match", Term.show (`Match (scrut, arms))))
      | first_ty :: rest_types ->
-       let unify_first ty = Solve.Constraints.(tell @@ Equals (first_ty, ty)) in
-       List.iter ~f:unify_first rest_types;
-       Ok
+       let* _ =
+         Context.traverse
+           rest_types
+           ~f:(Fun.compose Context.tell_constraint (Constraint.equals first_ty))
+       in
+       let* scrut_typ = quote 0 scrut_ty in
+       let* first_typ = quote 0 first_ty in
+       Context.pure
          ( first_ty
-         , `Ann (`Match (`Ann (scrut, quote 0 scrut_ty), annotated_arms), quote 0 first_ty)
+         , (`Ann (`Match (`Ann (scrut, scrut_typ), annotated_arms), first_typ) : Term.t)
          ))
   | `Lit lit ->
     (* print_endline "infer.Lit"; *)
     let* ty, lit' = infer_lit lit in
-    Ok (ty, `Ann (`Lit lit', quote 0 ty))
+    let* ty' = quote 0 ty in
+    Context.pure (ty, `Ann (`Lit lit', ty'))
   | `Meta m ->
     (* print_endline "infer.Meta"; *)
-    Ok (`Neutral (NMeta m), `Meta m)
+    Context.pure (`Neutral (NMeta m), `Meta m)
   | `Err e ->
     (* print_endline "infer.Err"; *)
-    Ok (`Err e, `Err e)
+    Context.pure (`Err e, `Err e)
   | `RecordType { fields; tail } ->
-    let record_val : Term.value =
-      let fields = Map.map fields ~f:eval
-      and tail = Option.map tail ~f:eval in
-      `RecordType { fields; tail }
+    let* record_val =
+      let* fields = Context.traverse_map fields ~f:eval in
+      let* tail =
+        match tail with
+        | Some tail -> eval tail >|= Option.some
+        | None -> Context.pure None
+      in
+      Context.pure @@ (`RecordType { fields; tail } : Term.value)
     in
-    Ok (`Type, `Ann (`RecordType { fields; tail }, quote 0 record_val))
+    let* record_val' = quote 0 record_val in
+    Context.pure (`Type, `Ann ((`RecordType { fields; tail } : Term.t), record_val'))
   | `SumType { ident; params; constructors; position } ->
     (* Sum types have type Type *)
-    let sum_val =
-      `SumType
-        { ident
-        ; params = Map.map ~f:eval params
-        ; constructors = Map.map ~f:(List.map ~f:eval) constructors
-        ; position
-        }
+    let* sum_val =
+      let* params = Context.traverse_map ~f:eval params in
+      let* constructors =
+        Context.traverse_map ~f:(Context.traverse ~f:eval) constructors
+      in
+      quote 0 @@ `SumType { ident; params; constructors; position }
     in
-    Ok (`Type, `Ann (`SumType { ident; params; constructors; position }, quote 0 sum_val))
+    Context.pure
+      (`Type, `Ann (`SumType { ident; params; constructors; position }, sum_val))
 
-and infer_lit
-  : Term.ast Term.literal -> (Term.value * Term.ast Term.literal, CalyxError.t) result
-  = function
-  | Int n -> Ok (`Neutral (NVar (0, Intern.intern "Int")), Int n)
-  | UInt n -> Ok (`Neutral (NVar (0, Intern.intern "UInt")), UInt n)
-  | Float x -> Ok (`Neutral (NVar (0, Intern.intern "Float")), Float x)
-  | Bool b -> Ok (`Neutral (NVar (0, Intern.intern "Bool")), Bool b)
+and infer_lit : Term.t Term.literal -> (Term.value * Term.t Term.literal) Context.t =
+  function
+  | Int n -> Context.pure (`Neutral (NVar (0, Intern.intern "Int")), Int n)
+  | UInt n -> Context.pure (`Neutral (NVar (0, Intern.intern "UInt")), UInt n)
+  | Float x -> Context.pure (`Neutral (NVar (0, Intern.intern "Float")), Float x)
+  | Bool b -> Context.pure (`Neutral (NVar (0, Intern.intern "Bool")), Bool b)
   | Record fields ->
-    let* fields : (Ident.t * (Term.value * Term.ast)) list =
-      Map.to_alist fields
-      |> List.map ~f:(fun (field, data) ->
-        let* ty, value = infer data in
-        Ok (field, (ty, value)))
-      |> sequence
+    let* fields =
+      Context.traverse_map
+        ~f:(fun data ->
+          let* ty, value = infer data in
+          Context.pure (ty, value))
+        fields
     in
-    let field_values : (Ident.t * Term.ast) list = List.map ~f:(Tuple.second snd) fields
-    and field_types : (Ident.t * Term.value) list =
-      List.map ~f:(Tuple.second fst) fields
-    in
+    let field_values = Map.map ~f:snd fields in
+    let field_types = Map.map ~f:fst fields in
     let record_type : Term.value =
-      let fields = Ident.Map.of_alist_exn field_types in
+      let fields = field_types in
       `RecordType { fields; tail = None }
     in
-    let fields = Ident.Map.of_alist_exn field_values in
-    Ok (record_type, Record fields)
+    let fields = field_values in
+    Context.pure (record_type, Record fields)
 
 (** Infer the type of [field] in [term] *)
-and infer_proj : Term.ast -> Ident.t -> (Term.value * Term.ast, CalyxError.t) result =
+and infer_proj : Term.t -> Ident.t -> (Term.value * Term.t) Context.t =
   fun term field ->
   let* typ, annotated = infer term in
   match typ with
   | `RecordType row ->
     (match Map.find row.fields field with
-     | Some field_type -> Ok (field_type, `Proj (annotated, field))
+     | Some field_type -> Context.pure (field_type, `Proj (annotated, field))
      | None ->
        (match row.tail with
         | Some tail ->
-          let field_type = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
-          Solve.Constraints.(tell @@ has_field ~record:tail ~field_name:field ~field_type);
-          Ok (field_type, `Proj (annotated, field))
+          let* meta = Context.fresh_meta in
+          let field_type = `Neutral (NMeta meta) in
+          let* _ =
+            Context.tell_constraint
+              (Constraint.has_field ~record:tail ~field_name:field ~field_type)
+          in
+          Context.pure (field_type, `Proj (annotated, field))
         | None ->
-          Error (`NoField (field, Map.to_alist @@ Map.map ~f:Term.show_value row.fields))))
+          Context.fail
+            (`NoField (field, Map.to_alist @@ Map.map ~f:Term.show_value row.fields))))
   | `Neutral n ->
-    let field_type = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
-    let partial : Term.value =
-      let fields = Ident.Map.singleton field field_type
-      and tail = Some (`Neutral (NMeta (Meta.fresh @@ Env.level ()))) in
-      `RecordType { fields; tail }
+    let* meta = Context.fresh_meta in
+    let field_type = `Neutral (NMeta meta) in
+    let* partial =
+      let fields : Term.value Ident.Map.t = Ident.Map.singleton field field_type in
+      let* meta = Context.fresh_meta in
+      let tail : Term.value option = Some (`Neutral (NMeta meta)) in
+      Context.pure @@ `RecordType ({ fields; tail } : Term.value Term.row)
     in
-    Solve.Constraints.(tell @@ equals (`Neutral n) partial);
-    Ok (field_type, `Proj (annotated, field))
-  | other -> Error (`Expected ("Record", Term.show_value other))
+    let* _ = Context.tell_constraint (Constraint.equals (`Neutral n) partial) in
+    Context.pure (field_type, `Proj (annotated, field))
+  | other -> Context.fail (`Expected ("Record", Term.show_value other))
 
-and check : Term.ast -> Term.value -> (Term.ast, CalyxError.t) result =
+and check : Term.t -> Term.value -> Term.t Context.t =
   fun term expected ->
   match term, expected with
   | `Lam (plicity, x, body), `Pi (plicity', _, dom, cod) ->
     if Term.equal_plicity plicity plicity'
     then
-      let* body' = Env.fresh_var x dom (fun var -> check body (cod var)) in
-      Ok (`Ann (`Lam (plicity, x, body'), quote 0 expected))
+      let* body' =
+        Context.with_var x ~typ:dom ~f:(fun var -> Context.liftR (cod var) >>= check body)
+      in
+      let* expected = quote 0 expected in
+      Context.pure (`Ann (`Lam (plicity, x, body'), expected))
     else
-      Error
+      Context.fail
         (`Expected
             ( "terms to have matching plicity"
-            , Printf.sprintf "%s\nvs.\n%s" (Term.show_ast term) (Term.show_value expected)
-            ))
+            , Printf.sprintf "%s\nvs.\n%s" (Term.show term) (Term.show_value expected) ))
   | `Lam (plicity, x, body), `Neutral (NMeta _ as m) ->
-    let dom = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
-    let cod = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
-    Solve.Constraints.(tell @@ Equals (`Neutral m, `Pi (plicity, x, dom, Fun.const cod)));
-    let* body' = Env.fresh_var x dom (fun _ -> check body cod) in
-    Ok (`Ann (`Lam (plicity, x, body'), quote 0 expected))
+    let* dom_meta = Context.fresh_meta in
+    let* cod_meta = Context.fresh_meta in
+    let dom = `Neutral (NMeta dom_meta) in
+    let cod = `Neutral (NMeta cod_meta) in
+    let* _ =
+      Context.tell_constraint
+        (Constraint.equals (`Neutral m) (`Pi (plicity, x, dom, Fun.const (Ok cod))))
+    in
+    let* body' = Context.with_var x ~typ:dom ~f:(fun _ -> check body cod) in
+    let* expected = quote 0 expected in
+    Context.pure (`Ann (`Lam (plicity, x, body'), expected))
   | `Let (ident, ty, value, body), expected ->
     let* vty =
       match ty with
       | Some t ->
         let* _ = check t `Type in
-        Ok (eval t)
-      | None -> Ok (`Neutral (NMeta (Meta.fresh @@ Env.level ())))
+        eval t
+      | None ->
+        let* meta = Context.fresh_meta in
+        Context.pure (`Neutral (NMeta meta))
     in
     let* value = check value vty in
-    let value' = eval value in
+    let* value' = eval value in
     let* body =
-      Env.local ~f:(Env.with_binding ident ~value:value' ~typ:vty) (fun () ->
-        check body expected)
+      Context.local
+        ~f:(Context.with_binding ident ~value:value' ~typ:vty)
+        (check body expected)
     in
-    Ok (`Let (ident, Some (quote 0 vty), value, body))
+    let* vty = quote 0 vty in
+    Context.pure (`Let (ident, Some vty, value, body))
   | `Pos (pos, term), expected ->
-    Env.local ~f:(Env.with_pos pos) (fun () ->
-      let* term = check term expected in
-      Ok (`Pos (pos, term)))
+    Context.local
+      ~f:(Context.with_pos pos)
+      (let* term = check term expected in
+       Context.pure (`Pos (pos, term)))
   | `Ann (expression, typ), expected ->
     let* _ = check typ `Type in
-    let typ' = eval typ in
-    Solve.Constraints.(tell @@ Equals (typ', expected));
+    let* typ' = eval typ in
+    let* _ = Context.tell_constraint (Constraint.equals typ' expected) in
     let* x = check expression typ' in
-    Ok (`Ann (x, typ))
+    Context.pure (`Ann (x, typ))
   | term, expected ->
     let* inferred, term' = infer term in
-    Solve.Constraints.(tell @@ Equals (inferred, expected));
-    Ok term'
+    let* _ = Context.tell_constraint (Constraint.equals inferred expected) in
+    Context.pure term'
 
 and row_extract : Ident.t -> Term.value Ident.Map.t -> (Term.value, CalyxError.t) result =
   fun field fields ->
@@ -429,113 +605,99 @@ and row_extract : Ident.t -> Term.value Ident.Map.t -> (Term.value, CalyxError.t
 ;;
 
 let infer_toplevel
-  : ast declaration list -> (ast declaration list, CalyxError.t list) result
+  : Term.t Term.declaration list -> Term.t Term.declaration list Context.t
   =
   fun program ->
-  let rec go
-    :  Term.ast Term.declaration list
-    -> (Term.ast Term.declaration list, CalyxError.t list) result
-    = function
+  let rec go = function
     | Function { ident; typ; body; position } :: rest ->
-      let vty = eval typ in
-      (* Printf.printf *)
-      (*   "infer_toplevel.Function { ident = %s; typ = %s; body = %s }\n" *)
-      (*   (Intern.lookup ident) *)
-      (*   (Term.show_value vty) *)
-      (*   (Term.show_ast body); *)
-      let placeholder = `Neutral (NVar (Env.level (), ident)) in
-      Env.local ~f:(Env.with_binding ident ~value:placeholder ~typ:vty) (fun () ->
-        let* body = Result.map_error ~f:Core.List.singleton @@ check body vty in
-        let typ = quote 0 vty in
-        Result.map ~f:(List.cons (Function { ident; typ; body; position })) @@ go rest)
+      let* vty = eval typ in
+      let* level = Context.level in
+      let placeholder = `Neutral (NVar (level, ident)) in
+      Context.local
+        ~f:(Context.with_binding ident ~value:placeholder ~typ:vty)
+        (let* body = check body vty in
+         let* typ = quote 0 vty in
+         Context.map
+           (go rest)
+           ~f:
+             (List.cons
+                (Function { ident; typ; body; position } : Term.t Term.declaration)))
     | Constant { ident; typ; body; position } :: rest ->
       let* typ, value =
-        Result.map_error
-          ~f:Core.List.singleton
-          (let vty = eval typ in
-           let* body_ast = check body vty in
-           Ok (vty, body_ast))
+        let* vty = eval typ in
+        let* body_ast = check body vty in
+        Context.pure (vty, body_ast)
       in
-      let value = eval value in
-      Env.local ~f:(Env.with_binding ident ~typ ~value) (fun () ->
-        let typ = quote 0 typ in
-        Result.map ~f:(List.cons (Constant { ident; typ; body; position })) @@ go rest)
+      let* value = eval value in
+      Context.local
+        ~f:(Context.with_binding ident ~typ ~value)
+        (let* typ = quote 0 typ in
+         Context.map (go rest) ~f:(List.cons (Constant { ident; typ; body; position })))
     | RecordDecl { ident; params = _; fields; position } :: rest ->
       (* Evaluate field types and construct the record type *)
-      let field_types = Map.map fields ~f:eval in
+      let* field_types = Context.traverse_map fields ~f:eval in
       let record_type : Term.value = `RecordType { fields = field_types; tail = None } in
       (* Bind the record type name to the record type value *)
-      Env.local ~f:(Env.with_binding ident ~value:record_type ~typ:`Type) (fun () ->
-        Result.map
-          ~f:
-            (List.cons (RecordDecl { ident; params = Ident.Map.empty; fields; position }))
-        @@ go rest)
+      Context.local
+        ~f:(Context.with_binding ident ~value:record_type ~typ:`Type)
+        (Context.map
+           ~f:
+             (List.cons
+                (RecordDecl { ident; params = Ident.Map.empty; fields; position }))
+         @@ go rest)
     (* Sum Types *)
     | SumDecl { ident; params; constructors; position } :: rest ->
-      (* Evaluate parameters to get their kinds *)
-      let param_list = Map.to_alist ~key_order:`Increasing params in
-      let eval_params = List.map param_list ~f:(fun (name, kind) -> name, eval kind) in
+      let* eval_params = Context.traverse_map ~f:eval params in
       (* Evaluate constructor arg types - recursive refs become Neutral(NVar(_, ident))
          which pattern_bindings resolves via environment lookup *)
-      let ctor_types = Map.map constructors ~f:(List.map ~f:eval) in
+      let* eval_constructors =
+        Context.traverse_map constructors ~f:(Context.traverse ~f:eval)
+      in
       let sum_type =
         `SumType
-          { ident
-          ; params = Ident.Map.of_alist_exn eval_params
-          ; constructors = ctor_types
-          ; position
-          }
+          { ident; params = eval_params; constructors = eval_constructors; position }
       in
-      (* Build constructor type using proper HOAS - fields are ASTs, evaluated inside closures *)
-      let build_ctor_type (fields : Term.ast list) : Term.value =
+      (* Build constructor type - fields are ASTs, evaluated inside closures *)
+      let build_ctor_type (fields : Term.t list) : Term.value Context.t =
         let rec build param_vars remaining_params =
           match remaining_params with
           | [] ->
-            (* All params bound in env - now evaluate fields *)
-            let eval_fields = List.map fields ~f:eval in
-            let applied =
-              List.fold_left param_vars ~init:sum_type ~f:(fun acc var -> app acc var)
-            in
-            List.fold_right eval_fields ~init:applied ~f:(fun field acc ->
-              `Pi (Explicit, Ident.Intern.underscore, field, Fun.const acc))
+            let* eval_fields = Context.traverse fields ~f:eval in
+            let* applied = Context.fold_left param_vars ~init:sum_type ~f:app in
+            Context.fold_left eval_fields ~init:applied ~f:(fun acc field ->
+              Context.pure
+              @@ `Pi (Explicit, Ident.Intern.underscore, field, Fun.const (Ok acc)))
           | (param_name, kind) :: rest_params ->
-            let snapshot = Env.ask () in
-            `Pi
-              ( Implicit
-              , param_name
-              , kind
-              , fun var ->
-                  Env.with_snapshot
-                    (Env.with_binding param_name ~value:var ~typ:kind snapshot)
-                    (fun () -> build (param_vars @ [ var ]) rest_params) )
+            let* cod =
+              Context.close ~f:(fun value ->
+                Context.local
+                  ~f:(Context.with_binding param_name ~value ~typ:kind)
+                  (build (param_vars @ [ value ]) rest_params))
+            in
+            Context.pure @@ `Pi (Implicit, param_name, kind, cod)
         in
-        build [] eval_params
+        build [] @@ Map.to_alist eval_params
       in
       (* Build constructor bindings with sum_type in scope for recursive references *)
-      let constructor_bindings =
-        Env.local ~f:(Env.with_binding ident ~value:sum_type ~typ:`Type) (fun () ->
-          Map.to_alist ~key_order:`Increasing constructors
-          |> List.map ~f:(fun (ctor, fields) ->
-            let ctor_pi = build_ctor_type fields in
-            ctor, `Opaque, ctor_pi))
+      let* constructor_bindings =
+        Context.local
+          ~f:(Context.with_binding ident ~value:sum_type ~typ:`Type)
+          (Map.to_alist ~key_order:`Increasing constructors
+           |> Context.traverse ~f:(fun (ctor, fields) ->
+             let* ctor_pi = build_ctor_type fields in
+             Context.pure (ctor, `Opaque, ctor_pi)))
       in
       let type_binding = ident, sum_type, `Type in
-      Env.local
-        ~f:(fun env ->
+      Context.local
+        ~f:(fun ctx ->
           List.fold_right
             (type_binding :: constructor_bindings)
-            ~init:env
-            ~f:(fun (ident, value, typ) -> Env.with_binding ident ~value ~typ))
-        (fun () ->
-           Result.map
-             ~f:(List.cons (SumDecl { ident; params; constructors; position }))
-             (go rest))
-    | [] -> Ok []
+            ~init:ctx
+            ~f:(fun (ident, value, typ) -> Context.with_binding ident ~value ~typ))
+        (Context.map
+           ~f:(List.cons (SumDecl { ident; params; constructors; position }))
+           (go rest))
+    | [] -> Context.pure []
   in
-  let program, constraints = Solve.Constraints.handle (fun () -> go program) in
-  match Solve.solve constraints with
-  | Ok () -> program
-  | Error es ->
-    print_endline (Solve.pretty_solver_error es);
-    raise (Failure "Failed to type program")
+  go program
 ;;

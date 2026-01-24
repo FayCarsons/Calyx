@@ -1,121 +1,117 @@
 open Core
-
-module Constraints = struct
-  module M = struct
-    (* Type solving constraints *)
-    type t =
-      | Equals of Term.value * Term.value
-      | HasField of Term.value * Ident.t * Term.value
-      | Subtype of
-          { sub : Term.value
-          ; super : Term.value
-          }
-    [@@deriving show, sexp]
-
-    let equals a b = Equals (a, b)
-    let ( %= ) = equals
-    let subtype ~sub ~super = Subtype { sub; super }
-
-    let has_field ~record ~field_name ~field_type =
-      HasField (record, field_name, field_type)
-    ;;
-
-    let ( =. ) record (field_name, field_type) = has_field ~record ~field_name ~field_type
-  end
-
-  include Writer.Make (M)
-  include M
-end
-
+open Context.Syntax
 open Term
 module Meta = Meta
 
-let rec force : value -> value = function
+let rec force : value -> value Context.t = function
   | `Neutral (NMeta m) as v ->
     (match m.Meta.solution with
      | Some solution -> force solution
-     | None -> v)
+     | None -> Context.pure v)
   | `Neutral (NVar (_, ident)) as v ->
     (* Try to look up the variable in the environment *)
-    (match Env.lookup_value ident with
+    let* value = Context.lookup_value ident in
+    (match value with
      | Some ((`Var ident' | `Neutral (NVar (_, ident'))) as v') ->
-       if Ident.equal ident ident' then v (* Self-referential, keep as is *) else force v'
-     | Some `Opaque -> v (* Don't resolve opaque types, keep as NVar *)
-     | _ -> v)
-  | v -> v
+       if Ident.equal ident ident'
+       then Context.pure v
+       (* Self-referential, keep as is *)
+       else force v'
+     | Some `Opaque -> Context.pure v (* Don't resolve opaque types, keep as NVar *)
+     | _ -> Context.pure v)
+  | v -> Context.pure v
 ;;
 
-let rec occurs (m : Meta.t) (v : value) : bool =
-  match force v with
-  | `Neutral (NMeta m') -> Meta.equal m m'
-  | `Neutral (NApp (f, x)) -> occurs_neutral m f || occurs m x
+let rec occurs (m : Meta.t) (v : value) : bool Context.t =
+  let open Context in
+  let open Syntax in
+  force v
+  >>= function
+  | `Neutral (NMeta m') -> pure @@ Meta.equal m m'
+  | `Neutral (NApp (f, x)) -> pure ( || ) <*> occurs m x <*> occurs_neutral m f
   | `Neutral (NProj (n, _)) -> occurs_neutral m n
   | `Pi (_, _, dom, cod) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
-    occurs m dom || occurs m (cod var)
+    let* cod = liftR @@ cod var in
+    pure ( || ) <*> occurs m dom <*> occurs m cod
   | `Lam (_, _, body) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
-    occurs m (body var)
+    let* body = liftR @@ body var in
+    occurs m body
   | `RecordType { fields; tail } ->
-    Map.exists ~f:(occurs m) fields
-    || Option.value ~default:false (Option.map tail ~f:(occurs m))
+    let* in_fields =
+      Map.data fields |> traverse ~f:(occurs m) |> map ~f:(List.exists ~f:Fun.id)
+    in
+    let* in_tail = Option.value ~default:(pure false) (Option.map tail ~f:(occurs m)) in
+    pure (in_fields || in_tail)
   | `Lit lit -> occurs_lit m lit
-  | _ -> false
+  | _ -> pure false
 
-and occurs_neutral m = function
-  | NMeta m' -> Meta.equal m m'
-  | NApp (f, x) -> occurs_neutral m f || occurs m x
+and occurs_neutral m =
+  let open Context in
+  let open Syntax in
+  function
+  | NMeta m' -> pure @@ Meta.equal m m'
+  | NApp (f, x) -> pure ( || ) <*> occurs_neutral m f <*> occurs m x
   | NProj (n, _) -> occurs_neutral m n
-  | _ -> false
+  | _ -> pure false
 
 and occurs_lit m = function
-  | Record fields -> Map.exists fields ~f:(occurs m)
-  | _ -> false
+  | Record fields ->
+    Map.data fields
+    |> Context.traverse ~f:(occurs m)
+    |> Context.map ~f:(List.exists ~f:Fun.id)
+  | _ -> Context.pure false
 ;;
 
-let solve_meta (m : Meta.t) (v : value) : (unit, CalyxError.t) result =
-  if occurs m v
-  then Error (`Occurs (Meta.show m))
-  else (
+let solve_meta (m : Meta.t) (v : value) : unit Context.t =
+  let open Context in
+  let open Syntax in
+  occurs m v
+  >>= function
+  | true -> Context.fail (`Occurs (Meta.show m))
+  | false ->
     Meta.solve m v;
-    Ok ())
+    Context.pure ()
 ;;
 
-let ( let* ) = Result.Let_syntax.( >>= )
-
-let rec unify : value -> value -> (unit, CalyxError.t) result =
+let rec unify : value -> value -> unit Context.t =
   fun a b ->
-  let a = force a
-  and b = force b in
+  let open Context in
+  let open Syntax in
+  let* a = force a in
+  let* b = force b in
   match a, b with
   | `Var l, `Var r ->
     if Ident.equal l r
-    then Ok ()
-    else Error (`UnificationFailure (Ident.Intern.lookup l, Ident.Intern.lookup r))
-  | `Neutral (NMeta m1), `Neutral (NMeta m2) when Meta.equal m1 m2 -> Ok ()
+    then pure ()
+    else tell_error (`UnificationFailure (Ident.Intern.lookup l, Ident.Intern.lookup r))
+  | `Neutral (NMeta m1), `Neutral (NMeta m2) when Meta.equal m1 m2 -> pure ()
   | `Neutral (NMeta m), v | v, `Neutral (NMeta m) -> solve_meta m v
-  | `Type, `Type -> Ok ()
+  | `Type, `Type -> pure ()
   | `Lam (_, _, body1), `Lam (_, _, body2) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
-    Constraints.(tell (body1 var %= body2 var));
-    Ok ()
+    let* body1 = liftR (body1 var) in
+    let* body2 = liftR (body2 var) in
+    Context.tell_constraint @@ Constraint.equals body1 body2
   | `Lam (_, _, body), f | f, `Lam (_, _, body) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     let* right = vapp f var in
-    Constraints.(tell (body var %= right));
-    Ok ()
+    let* body = liftR (body var) in
+    Context.tell_constraint @@ Constraint.equals body right
   | `Pi (_, _, dom, cod), `Pi (_, _, dom', cod') ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
-    Constraints.(tell (dom %= dom'));
-    Constraints.(tell (cod var %= cod' var));
-    Ok ()
+    let* _ = Context.tell_constraint Constraint.(equals dom dom') in
+    let* cod = liftR @@ cod var in
+    let* cod' = liftR @@ cod' var in
+    Context.tell_constraint Constraint.(equals cod cod')
   | (`Neutral (NVar (_, name)), `Var name' | `Var name, `Neutral (NVar (_, name')))
-    when Ident.equal name name' -> Ok ()
+    when Ident.equal name name' -> pure ()
   | `Neutral (NVar (l_level, l_name)), `Neutral (NVar (r_level, r_name)) ->
     if Int.equal l_level r_level && Ident.equal l_name r_name
-    then Ok ()
+    then pure ()
     else
-      Error
+      fail
         (`UnificationFailure
             ( Sexp.to_string_hum @@ Term.sexp_of_neutral (NVar (l_level, l_name))
             , Sexp.to_string_hum @@ Term.sexp_of_neutral (NVar (r_level, r_name)) ))
@@ -124,113 +120,125 @@ let rec unify : value -> value -> (unit, CalyxError.t) result =
   | `RecordType a, `RecordType b -> unify_record_types a b
   | `SumType a, `SumType b -> unify_sum_types a b
   (* A neutral variable referring to a sum type by name *)
-  | (`Neutral (NVar (_, name)), `SumType { ident; _ })
-  | (`SumType { ident; _ }, `Neutral (NVar (_, name)))
-    when Ident.equal name ident ->
-    Ok ()
-  | `Err _, _ | _, `Err _ -> Ok ()
+  | `Neutral (NVar (_, name)), `SumType { ident; _ }
+  | `SumType { ident; _ }, `Neutral (NVar (_, name))
+    when Ident.equal name ident -> pure ()
+  | `Err _, _ | _, `Err _ -> pure ()
   | a, b ->
-    Error
+    fail
       (`UnificationFailure
           ( Sexp.to_string_hum @@ Term.sexp_of_value a
           , Sexp.to_string_hum @@ Term.sexp_of_value b ))
 
-and unify_neutral : neutral -> neutral -> (unit, CalyxError.t) result =
+and unify_neutral : neutral -> neutral -> unit Context.t =
   fun l r ->
+  let open Context in
+  let open Syntax in
   match l, r with
   | NVar (l_level, l_name), NVar (r_level, r_name)
-    when Int.equal l_level r_level && Ident.equal l_name r_name -> Ok ()
+    when Int.equal l_level r_level && Ident.equal l_name r_name -> pure ()
   | NApp (f, x), NApp (f', x') ->
     let* _ = unify_neutral f f' in
-    Constraints.(tell (x %= x'));
-    Ok ()
+    Context.tell_constraint Constraint.(equals x x')
   | NProj (tm, field), NProj (tm', field') when Ident.equal field field' ->
     unify_neutral tm tm'
   (* Neutrals mismatch*)
   | l, r ->
-    Error
+    fail
       (`UnificationFailure
           ( Sexp.to_string_hum @@ Term.sexp_of_neutral l
           , Sexp.to_string_hum @@ Term.sexp_of_neutral r ))
 
 and unify_lit l r =
   match l, r with
-  | (Int a, Int b | UInt a, UInt b) when Int.equal a b -> Ok ()
-  | Float a, Float b when Float.equal a b -> Ok ()
-  | Bool a, Bool b when Bool.equal a b -> Ok ()
+  | (Int a, Int b | UInt a, UInt b) when Int.equal a b -> Context.pure ()
+  | Float a, Float b when Float.equal a b -> Context.pure ()
+  | Bool a, Bool b when Bool.equal a b -> Context.pure ()
   | Record l, Record r -> unify_record_literals l r
-  | _, _ -> Error `Todo
+  | _, _ -> Context.fail `Todo
 
-and unify_record_literals
-  : value Ident.Map.t -> value Ident.Map.t -> (unit, CalyxError.t) result
-  =
+and unify_record_literals : value Ident.Map.t -> value Ident.Map.t -> unit Context.t =
   fun a b ->
   if Set.equal (Map.key_set a) (Map.key_set b)
   then (
     let a' = Map.to_alist a
     and b' = Map.to_alist b in
-    if List.for_all2_exn a' b' ~f:(fun (_, a) (_, b) -> Result.is_ok (unify a b))
-    then Ok ()
-    else
-      Error
-        (`Expected (Ident.Map.show Term.show_value a, Ident.Map.show Term.show_value b)))
+    (* FIXME: Instead of relying on 'unify' to emit an error, we should make 
+       this whole check fallible and, on failure, emit a more descriptive 
+       "these" records don't match error *)
+    List.zip_exn a' b'
+    |> Context.traverse ~f:(fun ((_, a), (_, b)) -> unify a b)
+    |> Context.map ~f:(Fun.const ()))
   else
-    Error (`Expected (Ident.Map.show Term.show_value a, Ident.Map.show Term.show_value b))
+    Context.fail
+    @@ `Expected (Ident.Map.show Term.show_value a, Ident.Map.show Term.show_value b)
 
-and unify_sum_types : value sum_type -> value sum_type -> (unit, CalyxError.t) result =
+and unify_sum_types : value sum_type -> value sum_type -> unit Context.t =
   fun a b ->
-  (* Sum types unify if they have the same name *)
   if Ident.equal a.ident b.ident
-  then (
-    (* Unify constructors pairwise *)
-    Map.iter2 a.constructors b.constructors ~f:(fun ~key:_ ~data ->
-      match data with
-      | `Both (args_a, args_b) ->
-        List.iter2_exn args_a args_b ~f:(fun a b -> Constraints.(tell (a %= b)))
-      | _ -> ());
-    Ok ())
+  then
+    let* _ =
+      Map.fold2
+        a.constructors
+        b.constructors
+        ~init:(Context.pure ())
+        ~f:(fun ~key:_ ~data acc ->
+          let* () = acc in
+          match data with
+          | `Both (args_a, args_b) ->
+            List.zip_exn args_a args_b
+            |> Context.traverse ~f:(fun (a, b) ->
+              Context.tell_constraint (Constraint.equals a b))
+            >|= Fun.const ()
+          | _ -> Context.pure ())
+    in
+    Context.pure ()
   else
-    Error
+    Context.fail
       (`UnificationFailure
           ( Printf.sprintf "SumType %s" (Ident.Intern.lookup a.ident)
           , Printf.sprintf "SumType %s" (Ident.Intern.lookup b.ident) ))
 
-and unify_record_types : value row -> value row -> (unit, CalyxError.t) result =
+and unify_record_types : value row -> value row -> unit Context.t =
   fun a b ->
-  let all_fields = Set.union (Map.key_set a.fields) (Map.key_set b.fields) in
+  let open Context.Syntax in
+  let go field =
+    match Map.find a.fields field, Map.find b.fields field with
+    | Some a, Some b -> unify a b
+    | None, Some x ->
+      (match a.tail with
+       | Some tail ->
+         Context.tell_constraint
+           (Constraint.has_field ~record:tail ~field_name:field ~field_type:x)
+       | None ->
+         Context.fail
+           (`NoField
+               ( field
+               , List.map ~f:(Util.Tuple.second Term.show_value) @@ Map.to_alist a.fields
+               )))
+    | Some x, None ->
+      (match b.tail with
+       | Some tail ->
+         Context.tell_constraint
+           (Constraint.has_field ~record:tail ~field_name:field ~field_type:x)
+       | None ->
+         Context.fail
+           (`NoField
+               ( field
+               , List.map ~f:(Util.Tuple.second Term.show_value) @@ Map.to_alist a.fields
+               )))
+    | None, None -> (* Unreachable *) Context.pure ()
+  in
   let* _ =
-    Set.fold_result all_fields ~init:() ~f:(fun _ field ->
-      match Map.find a.fields field, Map.find b.fields field with
-      | Some a, Some b -> unify a b
-      | None, Some x ->
-        (match a.tail with
-         | Some tail ->
-           Constraints.(tell @@ has_field ~record:tail ~field_name:field ~field_type:x);
-           Ok ()
-         | None ->
-           Error
-             (`NoField
-                 ( field
-                 , List.map ~f:(Util.Tuple.second Term.show_value)
-                   @@ Map.to_alist a.fields )))
-      | Some x, None ->
-        (match b.tail with
-         | Some tail ->
-           Constraints.(tell @@ has_field ~record:tail ~field_name:field ~field_type:x);
-           Ok ()
-         | None ->
-           Error
-             (`NoField
-                 ( field
-                 , List.map ~f:(Util.Tuple.second Term.show_value)
-                   @@ Map.to_alist a.fields )))
-      | None, None -> (* Unreachable *) Ok ())
+    Context.traverse ~f:go
+    @@ Set.to_list
+    @@ Set.union (Map.key_set a.fields) (Map.key_set b.fields)
   in
   match a.tail, b.tail with
-  | None, None -> Ok ()
+  | None, None -> Context.pure ()
   | Some a, Some b -> unify a b
   | _ ->
-    Error
+    Context.fail
       (`Expected
           ( "two record types which are either both open, or both closed and equal"
           , Printf.sprintf
@@ -241,14 +249,14 @@ and unify_record_types : value row -> value row -> (unit, CalyxError.t) result =
 and vapp =
   fun f x ->
   match f with
-  | `Lam (_, _, body) -> Result.return @@ body x
-  | `Neutral n -> Result.return @@ `Neutral (NApp (n, x))
-  | otherwise -> Error (`Expected ("function", Term.show_value otherwise))
+  | `Lam (_, _, body) -> Context.liftR @@ body x
+  | `Neutral n -> Context.pure @@ `Neutral (NApp (n, x))
+  | otherwise -> Context.fail (`Expected ("function", Term.show_value otherwise))
 ;;
 
 type solver_error =
   | Stuck of
-      { stuck : Constraints.t list
+      { stuck : Constraint.t list
       ; errors : CalyxError.t list
       }
   | Errors of CalyxError.t list
@@ -258,116 +266,122 @@ let pretty_solver_error = function
   | Stuck { stuck; errors = _ :: _ as es } ->
     Printf.sprintf
       "Could not solve constraints:\n%s\nWith errors:\n%s\n"
-      (String.concat ~sep:", " @@ List.map ~f:Constraints.show stuck)
+      (String.concat ~sep:", " @@ List.map ~f:Constraint.show stuck)
       (String.concat ~sep:", " @@ List.map ~f:CalyxError.show es)
   | Stuck { stuck; _ } ->
     Printf.sprintf
       "Could not solve constraints:\n%s\n"
-      (String.concat ~sep:", " @@ List.map ~f:Constraints.show stuck)
+      (String.concat ~sep:", " @@ List.map ~f:Constraint.show stuck)
   | Errors es ->
     Printf.sprintf
       "Failed to solve due to errors:\n%s\n"
       (String.concat ~sep:",\n" @@ List.map ~f:CalyxError.show es)
 ;;
 
-let rec solve (initial : Constraints.t list) : (unit, solver_error) result =
-  let progressed = ref false in
-  let (_, next), errors =
-    CalyxError.handle (fun () ->
-      Constraints.handle (fun () ->
-        List.iter
-          ~f:(fun c ->
-            (* print_endline (Printf.sprintf "SOLVING CONSTRAINT: %s" (Constraints.show c)); *)
-            progressed := solve_one c)
-          initial))
+let rec solve (initial : Constraint.t list) : unit Context.t =
+  let open Context.Syntax in
+  let progressed =
+    Context.map ~f:(List.exists ~f:Fun.id) (Context.traverse ~f:solve_one initial)
   in
-  match next, errors, !progressed with
-  | [], [], _ -> Ok ()
-  | _, (_ :: _ as es), _ -> Error (Errors es)
-  | _, [], true -> solve next
-  | stuck, errors, false -> Error (Stuck { stuck; errors })
+  let* next = Context.get_constraints in
+  progressed
+  >>= function
+  | _ when List.is_empty next -> Context.pure ()
+  | true -> solve next
+  | false ->
+    Context.fail
+      (`Stuck
+          (List.map ~f:(Fun.compose Sexp.to_string_hum Constraint.sexp_of_t) next
+           |> String.concat ~sep:"\n"))
 
-and solve_one = function
+and solve_one : Constraint.t -> bool Context.t = function
   | Equals (a, b) ->
-    (match unify a b with
-     | Ok () -> true
-     | Error e ->
-       CalyxError.tell e;
-       true)
+    unify a b |> Context.map ~f:(Fun.const true) |> Context.fallible ~default:true
   | Subtype { sub; super } ->
     (* Printf.printf "SOLVING SUBTYPE '%s' :> '%s'" (Term.show_value a) (Term.show_value b); *)
     subsumes ~sub ~super
   | HasField (record, field_name, field_type) ->
     solve_record ~record ~field_name ~field_type
 
-and solve_record : record:value -> field_name:Ident.t -> field_type:value -> bool =
+and solve_record
+  : record:value -> field_name:Ident.t -> field_type:value -> bool Context.t
+  =
   fun ~record ~field_name ~field_type ->
-  match force record with
+  let open Context.Syntax in
+  force record
+  >>= function
   | `Lit (Record fields) ->
-    Option.iter
-      ~f:(Fun.compose Constraints.tell (Constraints.equals field_type))
-      (Map.find fields field_name);
-    true
+    let* _ =
+      match Map.find fields field_name with
+      | Some f -> Context.tell_constraint (Constraint.equals field_type f)
+      | None -> Context.pure ()
+    in
+    Context.pure true
   | `RecordType { fields; tail } ->
     (match Map.find fields field_name with
      | Some existing_type ->
-       Constraints.(tell @@ equals field_type existing_type);
-       true
+       Context.tell_constraint (Constraint.equals field_type existing_type)
+       >|= Fun.const true
      | None ->
        (match tail with
         | Some tail_val ->
-          Constraints.(tell @@ has_field ~record:tail_val ~field_name ~field_type);
-          true
+          Context.tell_constraint
+            (Constraint.has_field ~record:tail_val ~field_name ~field_type)
+          >|= Fun.const true
         | None ->
-          CalyxError.(
-            tell
+          let* _ =
+            Context.tell_error
             @@ `NoField
                  ( field_name
                  , List.map ~f:(Util.Tuple.second Term.show_value) @@ Map.to_alist fields
-                 );
-            true)))
+                 )
+          in
+          Context.pure true))
   | `Neutral (NMeta m) ->
     (* Solve meta to a record type with this field and an open tail *)
-    let fresh_tail = `Neutral (NMeta (Meta.fresh @@ Env.level ())) in
+    let* level = Context.level in
+    let fresh_tail = `Neutral (NMeta (Meta.fresh level)) in
     let record_type : Term.value =
       `RecordType
         { fields = Ident.Map.singleton field_name field_type; tail = Some fresh_tail }
     in
-    (match solve_meta m record_type with
-     | Ok () -> true
-     | Error e ->
-       CalyxError.tell e;
-       true)
+    let* _ = solve_meta m record_type in
+    Context.pure true
   | _ ->
-    CalyxError.tell @@ `Expected ("record", Term.show_value record);
-    true
+    let* _ = Context.tell_error @@ `Expected ("record", Term.show_value record) in
+    Context.pure true
 
 and subsumes ~sub ~super =
   let open Continue_or_stop in
+  let open Context.Syntax in
   match sub, super with
   | `RecordType sub, `RecordType super ->
-    Map.fold_until super.fields ~init:true ~finish:Fun.id ~f:(fun ~key ~data _ ->
-      match Map.find sub.fields key with
-      | Some sub ->
-        Constraints.(tell @@ subtype ~sub ~super:data);
-        Continue true
-      | None ->
-        (match sub.tail with
-         | Some tail ->
-           Constraints.(tell @@ has_field ~record:tail ~field_name:key ~field_type:data);
-           Continue true
-         | None -> Stop false))
-    &&
-      (match sub.tail, super.tail with
-      | _, None -> true
-      | None, Some _ -> false
-      | Some sub, Some super ->
-        Constraints.(tell @@ subtype ~sub ~super);
-        true)
+    let* fields_match : bool =
+      Map.fold_until
+        super.fields
+        ~init:(Context.pure true)
+        ~finish:Fun.id
+        ~f:(fun ~key ~data:super _ ->
+          match Map.find sub.fields key with
+          | Some sub ->
+            Continue
+              (Context.tell_constraint (Constraint.subtype ~sub ~super) >|= Fun.const true)
+          | None ->
+            (match sub.tail with
+             | Some tail ->
+               Continue
+                 (Context.tell_constraint
+                    (Constraint.has_field ~record:tail ~field_name:key ~field_type:super)
+                  >|= Fun.const true)
+             | None -> Stop (Context.pure false)))
+    in
+    (match sub.tail, super.tail with
+     | _, None -> Context.pure fields_match
+     | None, Some _ -> Context.pure false
+     | Some sub, Some super ->
+       Context.tell_constraint (Constraint.subtype ~sub ~super) >|= Fun.const true)
   (* NOTE: This is awkward and I am very suspicious of it *)
-  | _ ->
-    Constraints.(tell @@ equals sub super);
-    true
+  | _ -> Context.tell_constraint (Constraint.equals sub super) >|= Fun.const true
 ;;
 
 let%test "'a is subtype of 'a" =
@@ -388,5 +402,13 @@ let%test "'a is subtype of 'a" =
                 })
       }
   in
-  fst @@ Constraints.handle (fun () -> subsumes ~sub:a ~super:a)
+  Context.start @@ subsumes ~sub:a ~super:a
+  |> fst
+  |> function
+  | Ok _ -> true
+  | Error es ->
+    Printf.printf
+      "Failed: '%s'"
+      (Sexp.to_string_hum @@ List.sexp_of_t CalyxError.sexp_of_t es);
+    false
 ;;

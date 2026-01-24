@@ -62,10 +62,9 @@ let traverse_map
   Ident.Map.of_alist_exn alist, state
 ;;
 
-let resolve_expr : traversal -> ast -> ast * traversal =
+let resolve_expr : traversal -> t -> t * traversal =
   fun state tree ->
-  let rec go ({ scope; dependencies; toplevel } as state) : ast -> ast * traversal
-    = function
+  let rec go ({ scope; dependencies; toplevel } as state) : t -> t * traversal = function
     | `Var ident ->
       let state =
         if Set.mem scope ident
@@ -179,7 +178,7 @@ let resolve_expr : traversal -> ast -> ast * traversal =
   tree, state
 ;;
 
-let resolve_toplevel : traversal -> ast declaration -> ast declaration * traversal =
+let resolve_toplevel : traversal -> t declaration -> t declaration * traversal =
   fun state decl ->
   match decl with
   | Function { ident; typ; body; position } ->

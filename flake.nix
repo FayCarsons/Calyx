@@ -26,64 +26,74 @@
       with pkgs;
       {
         devShells.default = mkShell {
-          buildInputs = with ocamlPackages; [
-            zstd
-            ocaml
-            dune_3
-            findlib
-            ocaml-lsp
-            ocamlformat
-            odoc
-            utop
-            merlin
-            fzf
+          buildInputs =
+            with ocamlPackages;
+            with janeStreet;
+            [
+              zstd
+              ocaml
+              dune_3
+              findlib
+              ocaml-lsp
+              ocamlformat
+              odoc
+              utop
+              merlin
+              fzf
 
-            nodejs-slim_latest
+              nodejs-slim_latest
 
-            # OCaml libs
-            menhir
-            menhirLib
-            ppx_deriving
-            ppx_sexp_conv
-            ppx_sexp_value
-            qcheck
-            sexplib
-            base
-            core
-            cmdliner
-          ];
+              # OCaml libs
+              menhir
+              menhirLib
+              ppx_deriving
+              ppx_sexp_conv
+              ppx_sexp_value
+              ppx_jane
+              qcheck
+              sexplib
+              base
+              core
+              core_unix
+              cmdliner
+            ];
         };
 
         packages.default = ocamlPackages.buildDunePackage {
           pname = "calyx";
           version = "0.1.0";
           src = ./.;
-          buildInputs = with ocamlPackages; [
-            zstd
-            ocaml
-            dune_3
-            findlib
-            ocaml-lsp
-            ocamlformat
-            odoc
-            utop
-            merlin
-            fzf
+          buildInputs =
+            with ocamlPackages;
+            with janeStreet;
+            [
+              zstd
+              ocaml
+              dune_3
+              findlib
+              ocaml-lsp
+              ocamlformat
+              odoc
+              utop
+              merlin
+              fzf
 
-            nodejs-slim_latest
+              nodejs-slim_latest
 
-            # OCaml libs
-            menhir
-            menhirLib
-            ppx_deriving
-            ppx_sexp_conv
-            ppx_sexp_value
-            qcheck
-            sexplib
-            base
-            core
-            cmdliner
-          ];
+              # OCaml libs
+              menhir
+              menhirLib
+              ppx_deriving
+              ppx_sexp_conv
+              ppx_sexp_value
+              ppx_jane
+              qcheck
+              sexplib
+              base
+              core
+              core_unix
+              cmdliner
+            ];
         };
       }
     );

@@ -38,3 +38,6 @@ tree-sitter-calyx/src/
 tree-sitter-calyx/*.so
 tree-sitter-calyx/package-lock.json
 target/
+
+# Design docs (private for now)
+design/

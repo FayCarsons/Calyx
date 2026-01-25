@@ -253,3 +253,51 @@ let rec fold_left : f:('acc -> 'a -> 'acc t) -> init:'acc -> 'a list -> 'acc t =
     let* acc = f init x in
     fold_left ~f ~init:acc rest
 ;;
+
+let trace
+  :  Trace.judgement_kind
+  -> to_sexp:('a -> Sexp.t)
+  -> ?focus:Sexp.t
+  -> Lexing.position
+  -> 'a t
+  -> 'a t
+  =
+  fun kind ~to_sexp ?focus here m ->
+  { run =
+      (fun ctx ok err ->
+        let context =
+          Map.to_alist ctx.bindings
+          |> List.map ~f:(function
+            | ident, Untyped tm -> Ident.Intern.lookup ident, Term.sexp_of_value tm, None
+            | ident, Typed (tm, typ) ->
+              ( Ident.Intern.lookup ident
+              , Term.sexp_of_value tm
+              , Some (Term.sexp_of_value typ) ))
+        in
+        let source_location =
+          Trace.{ file = here.Lexing.pos_fname; line = here.Lexing.pos_lnum }
+        in
+        let judgement =
+          Trace.{ kind; focus; context; location = ctx.pos; source_location }
+        in
+        let action = Trace.enter judgement in
+        match action with
+        | Abort -> raise Trace.Trace_aborted
+        | _ ->
+          m.run
+            ctx
+            (fun a ctx' ->
+               let outcome = Trace.Succeeded (to_sexp a) in
+               let _ = Trace.leave judgement outcome in
+               ok a ctx')
+            (fun ctx' ->
+               let outcome =
+                 Trace.Failed
+                   (match ctx'.errors with
+                    | e :: _ -> e
+                    | [] -> `Todo)
+               in
+               let _ = Trace.leave judgement outcome in
+               err ctx'))
+  }
+;;

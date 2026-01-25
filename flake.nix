@@ -44,6 +44,10 @@
               nodejs-slim_latest
 
               # OCaml libs
+              nottui
+              nottui-unix
+              pprint
+              lsp
               menhir
               menhirLib
               ppx_deriving
@@ -81,6 +85,10 @@
               nodejs-slim_latest
 
               # OCaml libs
+              nottui
+              nottui-unix
+              pprint
+              lsp
               menhir
               menhirLib
               ppx_deriving

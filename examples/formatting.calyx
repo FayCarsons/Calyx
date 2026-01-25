@@ -1,0 +1,40 @@
+-- This is mostly for claude, which is great for writing pretty printers
+-- A collection of examples showing how things should be formatted
+
+data MyRecord (a : Type) where
+  annotation : String,
+  inner : a
+
+data MySumType (a : Type) (b : Type) where
+| Left a
+| Right b
+
+const secretNumber : Int = 42
+
+def aSmallRecord (a : { x : Int, y : Int | r }) -> Int do 
+  let b = { x = a.x, y = a.y } in 
+  b.x + b.y
+
+def map {a, b} (f : a -> b) (xs : List a) -> List b do 
+  match xs with
+  | Nil -> 
+    -- Nested match blocks should be delimited with 'end' to disambiguate
+    match xs with 
+    | Nil -> Nil
+    | Cons x xs -> fail
+    end
+  | Cons x xs -> Cons (f x) (map f xs)
+
+def main () -> Int do 
+  let bigRecord = 
+    { a = 230970987 
+    , b = 0983740 
+    , c = 098734 
+    , d = 1237890 
+    , e = 1237890 
+    , f = 1237890
+    }
+  in 
+  let fieldAofBigRecord = bigRecord.a in
+  let fieldBofBigRecord = bigRecord.b in
+  a + b

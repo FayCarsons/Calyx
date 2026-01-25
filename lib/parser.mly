@@ -33,7 +33,8 @@ let make_infix left op right =
 %%
 
 let loc(p) == inner = p; { 
-  let pos = Pos.from_parser start.pos_fname $startpos $endpos in 
+  let start,end' = ($startpos), ($endpos) in
+  let pos = Pos.from_parser start.pos_fname start end' in 
   `Pos (pos, inner)
 }
 
@@ -46,7 +47,7 @@ let declaration :=
   | data_decl
 
 let def_decl :=
-  DEF; ident = IDENT; params = params; ARROW; ret = type_expr; DO; body = expr; {
+  DEF; ident = IDENT; params = params; ARROW; ret = type_expr; DO; body = loc(expr); {
     let rec build_lam params body =
       match params with
       | [] -> body
@@ -64,7 +65,7 @@ let def_decl :=
   }
 
 let const_decl := 
-  | CONST; ident = IDENT; typ = preceded(COLON, type_expr); 
+  | CONST; ident = IDENT; COLON; typ = loc(type_expr); 
     EQUALS; body = expr; {
       let position = (Pos.pos_of_position  $startpos, Pos.pos_of_position $endpos) in
       Constant { ident; typ; body; position }

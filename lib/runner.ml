@@ -41,6 +41,7 @@ let print_ast_sexp =
 let compile (module Backend : Codegen.M) (path : string)
   : (string, CalyxError.t list) result
   =
+  Trace.enable_tracing ();
   Trace.handle_by_logging (fun () ->
     let result, _ =
       Context.run
@@ -51,17 +52,19 @@ let compile (module Backend : Codegen.M) (path : string)
            Parse.run contents |> Result.map_error (fun e -> `Parser e) |> Context.liftR
          in
          let desugared = List.map Term.desugar_toplevel toplevels in
-         print_endline "Desugared:";
-         List.iter print_ast_sexp desugared;
+         (* print_endline "Desugared:"; *)
+         (* List.iter print_ast_sexp desugared; *)
          let* inferred = Checker.infer_toplevel desugared in
-         print_endline "Inferred:";
-         List.iter print_ast_sexp inferred;
+         (* print_endline "Inferred:"; *)
+         (* List.iter print_ast_sexp inferred; *)
          let* zonked = Context.traverse ~f:Zonk.zonk_toplevel inferred in
-         print_endline "Zonked:";
-         List.iter print_ast_sexp zonked;
+         let* errors = Context.errors in
+         assert (List.is_empty errors);
+         (* print_endline "Zonked:"; *)
+         (* List.iter print_ast_sexp zonked; *)
          let ir = Ir.convert zonked in
-         print_endline "IR:";
-         List.iter (Fun.compose print_string Ir.PrettyIR.declaration) ir;
+         (* print_endline "IR:"; *)
+         (* List.iter (Fun.compose print_string Ir.PrettyIR.declaration) ir; *)
          Context.pure @@ Backend.compile ir)
     in
     result)

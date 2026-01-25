@@ -15,7 +15,10 @@
   ppx_log
   menhirLib
   unix
-  qcheck)
+  qcheck
+  nottui
+  nottui-unix
+  pprint)
  (foreign_stubs
   (language c)
   (names bloom bloom_stubs vector vector_stubs))

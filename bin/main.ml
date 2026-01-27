@@ -56,9 +56,7 @@ let step backend path =
           (Context.from_bindings Backend.standard_library)
           (let open Context.Syntax in
            let* toplevels =
-             Parse.run source
-             |> Result.map_error ~f:(fun e -> `Parser e)
-             |> Context.liftR
+             Parse.run source |> Result.map_error ~f:(fun e -> `Parser e) |> Context.liftR
            in
            let desugared = List.map ~f:Term.desugar_toplevel toplevels in
            let* inferred = Checker.infer_toplevel desugared in

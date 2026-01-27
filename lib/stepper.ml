@@ -745,11 +745,42 @@ let on_leave : Trace.leave_handler =
   }
 ;;
 
+let inspect_loop () =
+  match !term with
+  | None -> ()
+  | Some t ->
+    let rec loop () =
+      let _, h = Notty_unix.Term.size t in
+      tui_state := { !tui_state with viewport_height = h - 4 };
+      tui_state := Action.ensure_cursor_visible !tui_state;
+      let img = render !tui_state in
+      Notty_unix.Term.image t img;
+      match Notty_unix.Term.event t with
+      | `Resize _ -> loop ()
+      | event ->
+        (match Action.of_key event with
+         | None -> loop ()
+         | Some (Nav nav) ->
+           tui_state := Action.interpret !tui_state nav;
+           loop ()
+         | Some (Step Quit) -> ()
+         | Some (Step _) -> loop ())
+    in
+    loop ()
+;;
+
 let run ~source ~f =
   let on_start () =
     term := Some (Notty_unix.Term.create ());
     tui_state := { State.default with root = Some (make_virtual_root ()); source };
     Stack.clear node_stack
   in
-  Trace.handle_interactive ~on_enter ~on_leave ~on_start ~on_finish ~f
+  let result =
+    Trace.handle_interactive ~on_enter ~on_leave ~on_start ~on_finish:(fun () -> ()) ~f
+  in
+  (* Stay in inspection mode after tracing completes *)
+  tui_state := { !tui_state with current_path = Path.empty };
+  inspect_loop ();
+  on_finish ();
+  result
 ;;

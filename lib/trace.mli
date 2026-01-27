@@ -56,7 +56,6 @@ exception Trace_aborted
 (** {1 Trace Control} *)
 
 val enable_tracing : unit -> unit
-val disable_tracing : unit -> unit
 val enter : ('i, 'o) judgement -> step_action
 val leave : ('i, 'o) judgement -> 'o outcome -> step_action
 

@@ -48,15 +48,15 @@ let format path =
 
 let step backend path =
   let (module Backend : Codegen.M) = impl_of_backend backend in
+  let source = In_channel.read_all path in
   match
-    Stepper.run ~f:(fun () ->
+    Stepper.run ~source ~f:(fun () ->
       let result, _ =
         Context.run
           (Context.from_bindings Backend.standard_library)
           (let open Context.Syntax in
-           let contents = In_channel.read_all path in
            let* toplevels =
-             Parse.run contents
+             Parse.run source
              |> Result.map_error ~f:(fun e -> `Parser e)
              |> Context.liftR
            in

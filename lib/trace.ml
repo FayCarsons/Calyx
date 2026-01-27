@@ -2,7 +2,6 @@ open Core
 
 let tracing_enabled = ref false
 let enable_tracing () = tracing_enabled := true
-let disable_tracing () = tracing_enabled := false
 
 type source_location =
   { file : string
@@ -248,6 +247,7 @@ let handle_interactive
     ?(on_start = Fun.const ())
     ?(on_finish = Fun.const ())
     ~f ->
+  let open Effect.Deep in
   enable_tracing ();
   on_start ();
   let depth = ref 0 in
@@ -269,7 +269,6 @@ let handle_interactive
       on_finish ();
       raise Trace_aborted
   in
-  let open Effect.Deep in
   let result =
     match
       try_with
@@ -320,6 +319,5 @@ let handle_interactive
       on_finish ();
       raise e
   in
-  disable_tracing ();
   result
 ;;

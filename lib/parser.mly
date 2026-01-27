@@ -6,6 +6,10 @@ let make_var (ident : Ident.t) : cst = `Var ident
 let make_infix left op right = 
   `Infix { left; op = `Var op; right }
 
+let make_pos (startp, endp) inner = 
+  let pos = Pos.from_parser startp.Lexing.pos_fname startp endp in 
+  `Pos (pos, inner)
+
 %}
 
 /* Tokens */
@@ -47,7 +51,7 @@ let declaration :=
   | data_decl
 
 let def_decl :=
-  DEF; ident = IDENT; params = params; ARROW; ret = type_expr; DO; body = loc(expr); {
+  DEF; ident = IDENT; params = params; ARROW; ret = loc(type_expr); DO; body = loc(expr); {
     let rec build_lam params body =
       match params with
       | [] -> body
@@ -103,32 +107,32 @@ let binders :=
   | x = IDENT; COMMA; rest = binders; { (x, snd (List.hd rest)) :: rest }
   | x = IDENT; { [(x, `Type)] }
 
-(* Type expressions *)
 let type_expr :=
   | type_app
-  | dom = type_app; ARROW; cod = type_expr; {
+  | dom = loc(type_app); ARROW; cod = loc(type_expr); {
       `Pi { plicity = Explicit; ident = Ident.Intern.underscore; dom; cod }
     }
-  | LPAREN; ident = IDENT; COLON; dom = type_expr; RPAREN; ARROW; cod = type_expr; {
+  | LPAREN; ident = IDENT; COLON; dom = loc(type_expr); RPAREN; ARROW; cod = loc(type_expr); {
       `Pi {plicity = Explicit; ident; dom; cod}
     }
-  | LBRACE; ident = IDENT; COLON; dom = type_expr; RBRACE; ARROW; cod = type_expr; {
+  | LBRACE; ident = IDENT; COLON; dom = loc(type_expr); RBRACE; ARROW; cod = loc(type_expr); {
       `Pi {plicity = Implicit; ident; dom; cod}
     }
-  | LBRACE; ident = IDENT; RBRACE; ARROW; cod = type_expr; {
+  | LBRACE; ident = IDENT; RBRACE; ARROW; cod = loc(type_expr); {
       `Pi {plicity = Implicit; ident; dom = `Type; cod}
     }
 
 let type_app :=
   | type_atom
-  | f = type_app; arg = type_atom; { `App (f, arg) }
+  | f = loc(type_app); arg = loc(type_atom); { `App (f, arg) }
 
 let type_atom ==
   | x = IDENT; { make_var x }
   | TYPE; { `Type }
-  | LPAREN; ty = type_expr; RPAREN; { ty }
+  | LPAREN; ty = loc(type_expr); RPAREN; { ty }
   | LBRACE; fields = record_type_fields; tail = record_type_tail; RBRACE; {
-      `RecordType { fields; tail }
+      let startp = $startpos and endp = $endpos in
+      make_pos (startp, endp) @@ `RecordType { fields; tail }
     }
 
 let record_type_fields :=
@@ -192,7 +196,7 @@ let pattern_atom :=
   | LPAREN; p = pattern; RPAREN; { p }
 
 let expr_lambda :=
-  | BACKSLASH; params = nonempty_list(IDENT); ARROW; body = expr; {
+  | BACKSLASH; params = nonempty_list(IDENT); ARROW; body = loc(expr); {
       let rec build_lam = function
         | [] -> body
         | x :: xs -> `Lam (Explicit, x, build_lam xs)

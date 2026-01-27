@@ -13,15 +13,15 @@ echo -e "${BOLD}Running all examples...${RESET}"
 echo ""
 
 for file in examples/*.calyx; do
-    name=$(basename "$file" .calyx)
+  name=$(basename "$file" .calyx)
 
-    if dune exec ./bin/main.exe -- "$file" --backend js > /dev/null 2>&1; then
-        echo -e "  ${name} - ${GREEN}success${RESET}"
-        ((passed++))
-    else
-        echo -e "  ${name} - ${RED}failure${RESET}"
-        ((failed++))
-    fi
+  if dune exec ./bin/main.exe -- compile "$file" --backend js >/dev/null 2>&1; then
+    echo -e "  ${name} - ${GREEN}success${RESET}"
+    ((passed++))
+  else
+    echo -e "  ${name} - ${RED}failure${RESET}"
+    ((failed++))
+  fi
 done
 
 echo ""

@@ -388,6 +388,7 @@ and collect_lambda_params (acc : Ident.t list) = function
   | `Ann (term, _) -> collect_lambda_params acc term
   | `Lam (Term.Implicit, _, body) -> collect_lambda_params acc body
   | `Lam (Term.Explicit, x, body) -> collect_lambda_params (x :: acc) body
+  | `Pos (_, tm) -> collect_lambda_params acc tm
   | other -> acc, convert_expr other
 
 (* Convert a lambda with its Pi type to a lifted function *)
@@ -400,6 +401,7 @@ and convert_lambda_to_function : ?name_prefix:string -> Term.t -> Term.t -> t =
   let args, converted_body = collect_lambda_params [] body in
   let args = List.rev args in
   (* Put back in correct order *)
+  print_endline "convert_lambda_to_function";
   let typed_args = List.zip_exn args arg_types in
   let func_decl =
     Function
@@ -425,6 +427,13 @@ let convert : Term.t Term.declaration list -> declaration list =
       let args, converted_body = collect_lambda_params [] body in
       let args = List.rev args in
       (* Put back in correct order *)
+      print_endline "convert";
+      Printf.printf
+        "ARGS:\n%s\n"
+        (Sexp.to_string_hum @@ List.sexp_of_t Ident.sexp_of_t args);
+      Printf.printf
+        "ARG TYPES:\n%s\n"
+        (Sexp.to_string_hum @@ List.sexp_of_t sexp_of_ty arg_types);
       let args = List.zip_exn args arg_types in
       Function { ident; args; returns = return_type; body = converted_body; position }
     | Term.Constant { ident; typ; body; position } ->

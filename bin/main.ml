@@ -78,6 +78,14 @@ let format_cmd =
   Cmd.v info Term.(const format $ path)
 ;;
 
+let _lsp_command =
+  let open Cmdliner in
+  let doc = "Start LSP server" in
+  let _info = Cmd.info "LSP" ~doc in
+  (* TODO: make it work !! *)
+  assert false
+;;
+
 let main_cmd =
   let open Cmdliner in
   let doc = "Calyx compiler and tools" in

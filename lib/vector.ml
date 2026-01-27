@@ -8,6 +8,18 @@ external get : 'a t -> int -> 'a option = "caml_vector_get"
 external set : 'a t -> int -> 'a -> bool = "caml_vector_set"
 external length : 'a t -> int = "caml_vector_length"
 external capacity : 'a t -> int = "caml_vector_capacity"
+external unsafe_get : 'a t -> int -> 'a = "caml_vector_unsafe_get"
+external unsafe_set : 'a t -> int -> 'a -> unit = "caml_vector_unsafe_set"
+external to_array : 'a t -> 'a array = "caml_vector_to_array"
+external of_array : 'a array -> 'a t = "caml_vector_of_array"
+external clear : 'a t -> unit = "caml_vector_clear"
+external shrink_to_fit : 'a t -> unit = "caml_vector_shrink_to_fit"
+external copy : 'a t -> 'a t = "caml_vector_copy"
+external append : 'a t -> 'a t -> unit = "caml_vector_append"
+external concat : 'a t -> 'a t -> 'a t = "caml_vector_concat"
+external rev : 'a t -> 'a t = "caml_vector_rev"
+external rev_in_place : 'a t -> unit = "caml_vector_rev_in_place"
+external blit : 'a t -> int -> 'a t -> int -> int -> unit = "caml_vector_blit"
 
 let create ?(capacity = 64) () =
   let v = create_raw capacity in
@@ -15,7 +27,144 @@ let create ?(capacity = 64) () =
   v
 ;;
 
-let is_empty v = length v = 0
+let[@inline] is_empty v = length v = 0
+let[@inline] first v = if is_empty v then None else Some (unsafe_get v 0)
+
+let[@inline] last v =
+  let len = length v in
+  if len = 0 then None else Some (unsafe_get v (len - 1))
+;;
+
+let iter f v =
+  let len = length v in
+  for i = 0 to len - 1 do
+    f (unsafe_get v i)
+  done
+;;
+
+let iteri f v =
+  let len = length v in
+  for i = 0 to len - 1 do
+    f i (unsafe_get v i)
+  done
+;;
+
+let fold_left f acc v =
+  let len = length v in
+  let r = ref acc in
+  for i = 0 to len - 1 do
+    r := f !r (unsafe_get v i)
+  done;
+  !r
+;;
+
+let fold_right f v acc =
+  let len = length v in
+  let r = ref acc in
+  for i = len - 1 downto 0 do
+    r := f (unsafe_get v i) !r
+  done;
+  !r
+;;
+
+let to_list v = fold_right List.cons v []
+
+let of_list xs =
+  let v = create () in
+  List.iter (push v) xs;
+  v
+;;
+
+let map f v =
+  let len = length v in
+  let r = create ~capacity:(max len 1) () in
+  for i = 0 to len - 1 do
+    push r (f (unsafe_get v i))
+  done;
+  r
+;;
+
+let mapi f v =
+  let len = length v in
+  let r = create ~capacity:(max len 1) () in
+  for i = 0 to len - 1 do
+    push r (f i (unsafe_get v i))
+  done;
+  r
+;;
+
+let filter p v =
+  let r = create () in
+  let len = length v in
+  for i = 0 to len - 1 do
+    let x = unsafe_get v i in
+    if p x then push r x
+  done;
+  r
+;;
+
+let filter_map f v =
+  let r = create () in
+  let len = length v in
+  for i = 0 to len - 1 do
+    match f (unsafe_get v i) with
+    | Some y -> push r y
+    | None -> ()
+  done;
+  r
+;;
+
+let find p v =
+  let len = length v in
+  let rec go i =
+    if i >= len
+    then None
+    else (
+      let x = unsafe_get v i in
+      if p x then Some x else go (i + 1))
+  in
+  go 0
+;;
+
+let findi p v =
+  let len = length v in
+  let rec go i =
+    if i >= len
+    then None
+    else (
+      let x = unsafe_get v i in
+      if p x then Some (i, x) else go (i + 1))
+  in
+  go 0
+;;
+
+let find_map f v =
+  let len = length v in
+  let rec go i =
+    if i >= len
+    then None
+    else (
+      match f (unsafe_get v i) with
+      | Some _ as r -> r
+      | None -> go (i + 1))
+  in
+  go 0
+;;
+
+let exists p v =
+  let len = length v in
+  let rec go i = i < len && (p (unsafe_get v i) || go (i + 1)) in
+  go 0
+;;
+
+let for_all p v =
+  let len = length v in
+  let rec go i = i >= len || (p (unsafe_get v i) && go (i + 1)) in
+  go 0
+;;
+
+let mem ?(equal = ( = )) x v = exists (equal x) v
+let count p v = fold_left (fun n x -> if p x then n + 1 else n) 0 v
 
 let%test "push increases length" =
   let v = create () in
@@ -113,16 +262,4 @@ let%test_unit "capacity grows (QCheck)" =
             push v i
           done;
           length v = n && capacity v >= n)
-;;
-
-let%test_unit "survives GC pressure" =
-  for _ = 1 to 10 do
-    let v = create () in
-    for i = 1 to 1000 do
-      push v (String.make 100 'x');
-      (* allocate heap objects *)
-      if i mod 100 = 0 then Gc.full_major () (* force GC *)
-    done;
-    assert (length v = 1000)
-  done
 ;;

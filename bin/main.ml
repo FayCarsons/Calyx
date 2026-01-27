@@ -16,7 +16,18 @@ let backend_of_string = function
   | other -> Error (`Msg (Printf.sprintf "Unsupported backend '%s'" other))
 ;;
 
-let compile backend path =
+let build backend path =
+  let (module Backend : Codegen.M) = impl_of_backend backend in
+  let compiler_output = Runner.compile (module Backend) path in
+  match compiler_output with
+  | Ok output -> print_endline output
+  | Error es ->
+    Printf.printf
+      "Failed to compile:\n%s\n"
+      (String.concat ~sep:"\n" @@ List.map ~f:CalyxError.show es)
+;;
+
+let run backend path =
   let (module Backend : Codegen.M) = impl_of_backend backend in
   let compiler_output = Runner.compile (module Backend) path in
   match compiler_output with
@@ -91,24 +102,34 @@ let backend =
   Arg.(value & opt backend_conv JS & info [ "b"; "backend" ] ~doc ~docv:"BACKEND")
 ;;
 
-let compile_cmd =
+let build_cmd =
   let open Cmdliner in
-  let doc = "Compile Calyx source to target backend" in
-  let info = Cmd.info "compile" ~doc in
-  Cmd.v info Term.(const compile $ backend $ path)
+  let doc = "Compile program" in
+  let info = Cmd.info "BUILD" ~doc in
+  Cmd.v info Term.(const build $ backend $ path)
+;;
+
+let run_cmd =
+  let open Cmdliner in
+  let doc = "Compile and run program" in
+  let info = Cmd.info "RUN" ~doc in
+  Cmd.v info Term.(const run $ backend $ path)
 ;;
 
 let format_cmd =
   let open Cmdliner in
   let doc = "Format Calyx source code" in
-  let info = Cmd.info "format" ~doc in
+  let info = Cmd.info "FMT" ~doc in
   Cmd.v info Term.(const format $ path)
 ;;
 
 let step_cmd =
   let open Cmdliner in
-  let doc = "Interactively step through type checking" in
-  let info = Cmd.info "step" ~doc in
+  let doc =
+    "Interactively step through the compiler's stages with a TUI. Allows for \
+     fine-grained inspection, filtering, searching, and rewriting of terms"
+  in
+  let info = Cmd.info "STEP" ~doc in
   Cmd.v info Term.(const step $ backend $ path)
 ;;
 
@@ -122,9 +143,9 @@ let _lsp_command =
 
 let main_cmd =
   let open Cmdliner in
-  let doc = "Calyx compiler and tools" in
-  let info = Cmd.info "calyx" ~doc in
-  Cmd.group info [ compile_cmd; format_cmd; step_cmd ]
+  let doc = "CALYX TOOLCHAIN" in
+  let info = Cmd.info "CALYX" ~doc in
+  Cmd.group info [ build_cmd; run_cmd; format_cmd; step_cmd ]
 ;;
 
 let () = exit (Cmdliner.Cmd.eval main_cmd)

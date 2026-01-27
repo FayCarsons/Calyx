@@ -1,0 +1,6 @@
+(library
+ (name calyxLsp)
+ (public_name calyxLsp)
+ (libraries calyx linol linol-eio eio eio_main)
+ (preprocess
+  (pps ppx_jane ppx_deriving.show ppx_deriving.eq)))

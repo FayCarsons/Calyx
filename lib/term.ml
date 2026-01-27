@@ -327,7 +327,7 @@ module Meta = struct
       let s = Sexplib.Conv.string_of_sexp sexp in
       if Char.equal s.[0] '?'
       then int_of_string @@ String.sub s ~pos:1 ~len:(String.length s - 1)
-      else raise (Failure "Invalid Meta.t in sexpr")
+      else raise (Failure (Printf.sprintf "Invalid Meta.t: %s" s))
     ;;
 
     let sexp_of_t : t -> Sexplib.Sexp.t =

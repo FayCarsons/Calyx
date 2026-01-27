@@ -2,6 +2,7 @@ open Core
 
 let tracing_enabled = ref false
 let enable_tracing () = tracing_enabled := true
+let disable_tracing () = tracing_enabled := false
 
 type source_location =
   { file : string
@@ -9,33 +10,23 @@ type source_location =
   }
 [@@deriving sexp]
 
-type judgement_kind =
-  | Infer
-  | Normalize
-  | Check of { against : Sexp.t }
-  | Unify of
-      { lhs : Sexp.t
-      ; rhs : Sexp.t
-      ; strategy : [ `Structural | `Normalize | `Eta ]
-      }
-  | Exhaustion of
-      { constructors : string list
-      ; covered : string list
-      ; missing : string list
-      }
-[@@deriving sexp]
+type (_, _) stage =
+  | Infer : (Term.t, Term.value * Term.t) stage
+  | Check : Term.value -> (Term.t, Term.t) stage
+  | Eval : (Term.t, Term.value) stage
+  | Quote : (Term.value, Term.t) stage
+  | Unify : (Term.value * Term.value, unit) stage
 
-type judgement =
-  { kind : judgement_kind
-  ; focus : Sexp.t option [@sexp.option]
-  ; context : (string * Sexp.t * Sexp.t option) list [@sexp.list]
+type ('i, 'o) judgement =
+  { stage : ('i, 'o) stage
+  ; focus : 'i
+  ; context : (string * Term.value * Term.value option) list Lazy.t
   ; location : Pos.t
   ; source_location : source_location
   }
-[@@deriving sexp]
 
-type trace_outcome =
-  | Succeeded of Sexp.t
+type 'o outcome =
+  | Succeeded of 'o
   | Failed of CalyxError.t
 
 type step_action =
@@ -48,8 +39,8 @@ type step_action =
 exception Trace_aborted
 
 type _ Effect.t +=
-  | Enter : judgement -> step_action Effect.t
-  | Leave : judgement * trace_outcome -> step_action Effect.t
+  | Enter : ('i, 'o) judgement -> step_action Effect.t
+  | Leave : ('i, 'o) judgement * 'o outcome -> step_action Effect.t
 
 let enter judgement =
   if !tracing_enabled then Effect.perform (Enter judgement) else Continue
@@ -59,46 +50,47 @@ let leave judgement outcome =
   if !tracing_enabled then Effect.perform (Leave (judgement, outcome)) else Continue
 ;;
 
-let trace
-  :  judgement_kind
-  -> to_sexp:('a -> Sexp.t)
-  -> ?focus:Sexp.t
-  -> ?context:(string * Sexp.t * Sexp.t option) list
-  -> location:Pos.t
-  -> Lexing.position
-  -> (unit -> 'a)
-  -> 'a
-  =
-  fun kind
-    ~to_sexp
-    ?focus
-    ?(context = [])
-    ~location
-    Lexing.{ pos_fname = file; pos_lnum = line; _ }
-    f ->
-  let source_location = { file; line } in
-  let judgement = { kind; focus; context; location; source_location } in
-  let action = enter judgement in
-  match action with
-  | Abort -> raise Trace_aborted
-  | _ ->
-    (try
-       let result = f () in
-       let outcome = Succeeded (to_sexp result) in
-       let _ = leave judgement outcome in
-       result
-     with
-     | Trace_aborted -> raise Trace_aborted
-     | exn ->
-       let outcome = Failed `Todo in
-       let _ = leave judgement outcome in
-       raise exn)
-;;
-
-let timestamp : unit -> string =
-  fun () ->
+let timestamp () =
   let now = Time_float_unix.now () in
   Time_float_unix.to_string_abs now ~zone:(Lazy.force Time_float_unix.Zone.local)
+;;
+
+let sexp_of_stage : type i o. (i, o) stage -> Sexp.t = function
+  | Infer -> Sexp.Atom "Infer"
+  | Check _ -> Sexp.Atom "Check"
+  | Eval -> Sexp.Atom "Eval"
+  | Quote -> Sexp.Atom "Quote"
+  | Unify -> Sexp.Atom "Unify"
+;;
+
+let sexp_of_focus : type i o. (i, o) stage -> i -> Sexp.t =
+  fun stage focus ->
+  match stage with
+  | Infer -> Term.sexp_of_t focus
+  | Check _ -> Term.sexp_of_t focus
+  | Eval -> Term.sexp_of_t focus
+  | Quote -> Term.sexp_of_value focus
+  | Unify ->
+    let lhs, rhs = focus in
+    Sexp.List [ Term.sexp_of_value lhs; Term.sexp_of_value rhs ]
+;;
+
+let sexp_of_outcome : type i o. (i, o) stage -> o outcome -> Sexp.t =
+  fun stage outcome ->
+  match outcome with
+  | Failed err -> Sexp.List [ Sexp.Atom "Failed"; Sexp.Atom (CalyxError.show err) ]
+  | Succeeded result ->
+    let result_sexp =
+      match stage with
+      | Infer ->
+        let ty, tm = result in
+        Sexp.List [ Term.sexp_of_value ty; Term.sexp_of_t tm ]
+      | Check _ -> Term.sexp_of_t result
+      | Eval -> Term.sexp_of_value result
+      | Quote -> Term.sexp_of_t result
+      | Unify -> Sexp.Atom "()"
+    in
+    Sexp.List [ Sexp.Atom "Succeeded"; result_sexp ]
 ;;
 
 let handle_by_logging : ?output:Out_channel.t -> (unit -> 'a) -> 'a =
@@ -118,56 +110,24 @@ let handle_by_logging : ?output:Out_channel.t -> (unit -> 'a) -> 'a =
                 let ts = timestamp () in
                 Printf.fprintf
                   output
-                  "[%s] ENTER %s\n"
+                  "[%s] ENTER %s %s\n"
                   ts
-                  (Sexp.to_string_hum @@ sexp_of_judgement { judgement with context = [] });
+                  (Sexp.to_string_hum @@ sexp_of_stage judgement.stage)
+                  (Sexp.to_string_hum @@ sexp_of_focus judgement.stage judgement.focus);
                 Out_channel.flush output;
                 continue k Continue)
           | Leave (judgement, outcome) ->
             Some
               (fun (k : (a, _) continuation) ->
                 let ts = timestamp () in
-                let outcome_str =
-                  match outcome with
-                  | Succeeded sexp -> Sexp.to_string_hum sexp
-                  | Failed err -> CalyxError.show err
-                in
                 Printf.fprintf
                   output
                   "[%s] LEAVE %s: %s\n"
                   ts
-                  (Sexp.to_string_hum @@ sexp_of_judgement { judgement with context = [] })
-                  outcome_str;
+                  (Sexp.to_string_hum @@ sexp_of_stage judgement.stage)
+                  (Sexp.to_string_hum @@ sexp_of_outcome judgement.stage outcome);
                 Out_channel.flush output;
                 continue k Continue)
-          | _ -> None)
-    }
-;;
-
-let handle_interactive
-  :  on_enter:(judgement -> step_action)
-  -> on_leave:(judgement -> trace_outcome -> step_action)
-  -> f:(unit -> 'a)
-  -> 'a
-  =
-  fun ~on_enter ~on_leave ~f ->
-  let open Effect.Deep in
-  try_with
-    f
-    ()
-    { effc =
-        (fun (type a) (eff : a Effect.t) ->
-          match eff with
-          | Enter judgement ->
-            Some
-              (fun (k : (a, _) continuation) ->
-                let action = on_enter judgement in
-                continue k action)
-          | Leave (judgement, outcome) ->
-            Some
-              (fun (k : (a, _) continuation) ->
-                let action = on_leave judgement outcome in
-                continue k action)
           | _ -> None)
     }
 ;;
@@ -185,4 +145,62 @@ let handle_noop : f:(unit -> 'a) -> 'a =
           | Leave _ -> Some (fun (k : (a, _) continuation) -> continue k Continue)
           | _ -> None)
     }
+;;
+
+type node_data =
+  | Pending : ('i, 'o) judgement -> node_data
+  | Complete : ('i, 'o) judgement * 'o outcome -> node_data
+
+type node =
+  { mutable data : node_data
+  ; children : node Vector.t
+  }
+
+let handle_with_tree : f:(unit -> 'a) -> 'a * node option =
+  fun ~f ->
+  let root = ref None in
+  let stack = Stack.create () in
+  let open Effect.Deep in
+  let result =
+    try_with
+      f
+      ()
+      { effc =
+          (fun (type a) (eff : a Effect.t) ->
+            match eff with
+            | Enter judgement ->
+              Some
+                (fun (k : (a, _) continuation) ->
+                  let node = { data = Pending judgement; children = Vector.create () } in
+                  (match Stack.top stack with
+                   | Some parent -> Vector.push parent.children node
+                   | None -> root := Some node);
+                  Stack.push stack node;
+                  continue k Continue)
+            | Leave (judgement, outcome) ->
+              Some
+                (fun (k : (a, _) continuation) ->
+                  (match Stack.pop stack with
+                   | Some node -> node.data <- Complete (judgement, outcome)
+                   | None -> ());
+                  continue k Continue)
+            | _ -> None)
+      }
+  in
+  result, !root
+;;
+
+let get_type_from_node node =
+  match node.data with
+  | Pending _ -> None
+  | Complete ({ stage = Infer; _ }, Succeeded (ty, _)) -> Some ty
+  | Complete ({ stage = Check expected; _ }, Succeeded _) -> Some expected
+  | Complete ({ stage = Eval; _ }, Succeeded v) -> Some v
+  | Complete _ -> None
+;;
+
+let get_location node =
+  match node.data with
+  | Pending j -> j.location
+  | Complete (j, _) -> j.location
 ;;

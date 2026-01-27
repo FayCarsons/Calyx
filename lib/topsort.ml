@@ -20,3 +20,14 @@ let topsort : Ident.t list Ident.Map.t -> Ident.t list =
   in
   Map.keys deps |> List.sort ~compare
 ;;
+
+(* let%test "Top Sort" = *)
+(*   QCheck.Test.check_exn *)
+(*   @@ QCheck.Test.make *)
+(*        ~count:100 *)
+(*        ~name:"Top sort works" *)
+(*        QCheck.(list (tup2 int64 (list int64))) *)
+(*     (fun graph ->  *)
+(*       topsort graph *)
+(*     ) *)
+(* ;; *)

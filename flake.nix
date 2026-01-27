@@ -47,7 +47,6 @@
               nottui
               nottui-unix
               pprint
-              lsp
               menhir
               menhirLib
               ppx_deriving
@@ -60,6 +59,11 @@
               core
               core_unix
               cmdliner
+
+              linol
+              linol-eio
+              eio
+              eio_main
             ];
         };
 
@@ -88,7 +92,6 @@
               nottui
               nottui-unix
               pprint
-              lsp
               menhir
               menhirLib
               ppx_deriving
@@ -101,6 +104,11 @@
               core
               core_unix
               cmdliner
+
+              linol
+              linol-eio
+              eio
+              eio_main
             ];
         };
       }

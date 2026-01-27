@@ -50,14 +50,15 @@ type t =
   | Match of t * (pattern * t) list
   | Proj of t * Ident.t
   | Infix of t * Ident.t * t
+[@@deriving show, sexp]
 
 and literal =
   | Int of int
   | UInt of int
   | Float of float
   | Bool of bool
-  (* TODO: This should hold an optional type name *)
   | Record of t Ident.Map.t
+[@@deriving show, sexp]
 
 and pattern =
   | PVar of Ident.t
@@ -92,6 +93,7 @@ type declaration =
       ; constructors : (Ident.t * ty list) list
       ; position : Pos.pos * Pos.pos
       }
+[@@deriving show, sexp]
 
 module PrettyIR = struct
   (* IR *)

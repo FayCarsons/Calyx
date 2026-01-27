@@ -3,6 +3,7 @@ let mkdir path =
   | Unix.Unix_error (Unix.EEXIST, _, _) -> ()
 ;;
 
+(** Write compiled program [compiler_output] to `.calyx/out.[extension]` *)
 let output_to_file ~extension ~compiler_output : unit =
   let target_dir = ".calyx" in
   mkdir target_dir;
@@ -11,6 +12,7 @@ let output_to_file ~extension ~compiler_output : unit =
   Printf.printf "Output written to: %s\n" output_path
 ;;
 
+(** Run the compiled program *)
 let execute (module Backend : Codegen.M) (cmd : string) =
   let output_path =
     Filename.concat ".calyx" (Printf.sprintf "out.%s" Backend.extension)
@@ -38,10 +40,11 @@ let print_ast_sexp =
   >> Term.sexp_of_declaration Term.sexp_of_t
 ;;
 
-let compile (module Backend : Codegen.M) (path : string)
-  : (string, CalyxError.t list) result
+let compile
+  : ?trace:bool -> (module Codegen.M) -> string -> (string, CalyxError.t list) result
   =
-  Trace.enable_tracing ();
+  fun ?(trace = false) (module Backend) path ->
+  if trace then Trace.enable_tracing ();
   Trace.handle_by_logging (fun () ->
     let result, _ =
       Context.run

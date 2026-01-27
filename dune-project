@@ -25,3 +25,6 @@
   cmdliner
   (ppx_inline_test :with-test)
   (ppx_expect :with-test)))
+
+(package
+ (name calyxLsp))

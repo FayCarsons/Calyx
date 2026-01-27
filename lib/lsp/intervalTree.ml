@@ -148,3 +148,27 @@ module Make (Key : Key) : M with type key = Key.t = struct
     fold_overlaps interval ~f:(fun acc interval data -> (interval, data) :: acc) ~init:[]
   ;;
 end
+
+open Calyx
+
+(** Position key for interval tree.
+    Note: Pos.column is actually Menhir's pos_cnum (absolute character offset),
+    which is ideal for interval tree operations as it's a single monotonic integer. *)
+module PosKey : Key with type t = Pos.t = struct
+  type t = Pos.t
+
+  let compare a b =
+    let cmp_lo = Int.compare a.Pos.lo.column b.Pos.lo.column in
+    if cmp_lo <> 0 then cmp_lo else Int.compare a.Pos.hi.column b.Pos.hi.column
+  ;;
+
+  let equal a b =
+    a.Pos.lo.column = b.Pos.lo.column && a.Pos.hi.column = b.Pos.hi.column
+  ;;
+
+  let low t = t.Pos.lo.column
+  let high t = t.Pos.hi.column
+end
+
+(** source position tree *)
+module Positions = Make (PosKey)

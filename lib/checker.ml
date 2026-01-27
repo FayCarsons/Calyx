@@ -13,12 +13,8 @@ let over_literal (f : 'a -> 'b) : 'a Term.literal -> 'b Term.literal = function
 
 let rec eval : Term.t -> Term.value Context.t =
   fun tm ->
-  Context.trace
-    ~to_sexp:Term.sexp_of_value
-    ~focus:(Term.sexp_of_t tm)
-    Trace.Normalize
-    [%here]
-    (match tm with
+  Context.trace Trace.Eval tm [%here]
+  @@ match tm with
      | `Var name ->
        Context.lookup_value name
        >>= (function
@@ -100,7 +96,7 @@ let rec eval : Term.t -> Term.value Context.t =
          Context.traverse_map ~f:(Context.traverse ~f:eval) constructors
        in
        Context.pure @@ `SumType { ident; params; constructors; position }
-     | `Proj (term, field) -> eval term >>= proj field)
+     | `Proj (term, field) -> eval term >>= proj field
 
 and app : value -> value -> value Context.t =
   fun f x ->
@@ -201,12 +197,8 @@ and pattern_bindings
 
 let rec quote : int -> Term.value -> Term.t Context.t =
   fun lvl tm ->
-  Context.trace
-    ~to_sexp:Term.sexp_of_t
-    ~focus:(Term.sexp_of_value tm)
-    Trace.Normalize
-    [%here]
-    (match tm with
+  Context.trace Trace.Quote tm [%here]
+  @@ match tm with
      | `App (f, x) ->
        let* f = quote lvl f in
        let* x = quote lvl x in
@@ -271,7 +263,7 @@ let rec quote : int -> Term.value -> Term.t Context.t =
        Context.pure @@ `Ann (tm, typ)
      | `Proj (tm, field) ->
        let* tm = quote lvl tm in
-       Context.pure @@ `Proj (tm, field))
+       Context.pure @@ `Proj (tm, field)
 
 and quote_pattern (lvl : int) : Term.value Term.pattern -> Term.t Term.pattern Context.t
   = function
@@ -308,11 +300,7 @@ and quote_neutral (lvl : int) : neutral -> Term.t Context.t = function
 
 let rec infer : Term.t -> (Term.value * Term.t) Context.t =
   fun tm ->
-  Context.trace
-    ~to_sexp:(Tuple2.sexp_of_t Term.sexp_of_value Term.sexp_of_t)
-    ~focus:(Term.sexp_of_t tm)
-    Trace.Infer
-    [%here]
+  Context.trace Trace.Infer tm [%here]
   @@
   match tm with
   | `Var i ->
@@ -556,11 +544,7 @@ and infer_proj : Term.t -> Ident.t -> (Term.value * Term.t) Context.t =
 
 and check : Term.t -> Term.value -> Term.t Context.t =
   fun term expected ->
-  Context.trace
-    ~to_sexp:Term.sexp_of_t
-    ~focus:(Term.sexp_of_t term)
-    (Trace.Check { against = Term.sexp_of_value expected })
-    [%here]
+  Context.trace (Trace.Check expected) term [%here]
   @@
   match term, expected with
   | `Lam (plicity, x, body), `Pi (plicity', _, dom, cod) ->

@@ -254,31 +254,22 @@ let rec fold_left : f:('acc -> 'a -> 'acc t) -> init:'acc -> 'a list -> 'acc t =
     fold_left ~f ~init:acc rest
 ;;
 
-let trace
-  :  Trace.judgement_kind
-  -> to_sexp:('a -> Sexp.t)
-  -> ?focus:Sexp.t
-  -> Lexing.position
-  -> 'a t
-  -> 'a t
-  =
-  fun kind ~to_sexp ?focus here m ->
+let trace : ('i, 'o) Trace.stage -> 'i -> Lexing.position -> 'o t -> 'o t =
+  fun stage focus here m ->
   { run =
       (fun ctx ok err ->
         let context =
-          Map.to_alist ctx.bindings
-          |> List.map ~f:(function
-            | ident, Untyped tm -> Ident.Intern.lookup ident, Term.sexp_of_value tm, None
-            | ident, Typed (tm, typ) ->
-              ( Ident.Intern.lookup ident
-              , Term.sexp_of_value tm
-              , Some (Term.sexp_of_value typ) ))
+          lazy
+            (Map.to_alist ctx.bindings
+             |> List.map ~f:(function
+               | ident, Untyped tm -> Ident.Intern.lookup ident, tm, None
+               | ident, Typed (tm, typ) -> Ident.Intern.lookup ident, tm, Some typ))
         in
         let source_location =
           Trace.{ file = here.Lexing.pos_fname; line = here.Lexing.pos_lnum }
         in
         let judgement =
-          Trace.{ kind; focus; context; location = ctx.pos; source_location }
+          Trace.{ stage; focus; context; location = ctx.pos; source_location }
         in
         let action = Trace.enter judgement in
         match action with
@@ -287,7 +278,7 @@ let trace
           m.run
             ctx
             (fun a ctx' ->
-               let outcome = Trace.Succeeded (to_sexp a) in
+               let outcome = Trace.Succeeded a in
                let _ = Trace.leave judgement outcome in
                ok a ctx')
             (fun ctx' ->

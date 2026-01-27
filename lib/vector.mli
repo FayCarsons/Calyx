@@ -129,6 +129,17 @@ val mem : ?equal:('a -> 'a -> bool) -> 'a -> 'a t -> bool
 (** [count p v] returns the number of elements satisfying [p]. *)
 val count : ('a -> bool) -> 'a t -> int
 
+(** {1 Comparison} *)
+
+(** [compare cmp a b] compares vectors lexicographically using [cmp] for elements. *)
+val compare : ('a -> 'a -> int) -> 'a t -> 'a t -> int
+
+(** [equal eq a b] returns [true] if vectors have same length and all elements are equal. *)
+val equal : ('a -> 'a -> bool) -> 'a t -> 'a t -> bool
+
+(** [hash hash_elt v] computes a hash using [hash_elt] for elements. *)
+val hash : ('a -> int) -> 'a t -> int
+
 (** {1 Conversion} *)
 
 (** [to_list v] converts to a list. O(n). *)
@@ -136,3 +147,6 @@ val to_list : 'a t -> 'a list
 
 (** [to_array v] converts to an array. O(n). *)
 val to_array : 'a t -> 'a array
+
+val t_of_sexp : (Core.Sexp.t -> 'a) -> Core.Sexp.t -> 'a t
+val sexp_of_t : ('a -> Core.Sexp.t) -> 'a t -> Core.Sexp.t

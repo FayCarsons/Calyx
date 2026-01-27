@@ -166,6 +166,49 @@ let for_all p v =
 let mem ?(equal = ( = )) x v = exists (equal x) v
 let count p v = fold_left (fun n x -> if p x then n + 1 else n) 0 v
 
+let compare cmp a b =
+  let len_a = length a
+  and len_b = length b in
+  let rec go i =
+    if i >= len_a
+    then if i >= len_b then 0 else -1
+    else if i >= len_b
+    then 1
+    else (
+      let c = cmp (unsafe_get a i) (unsafe_get b i) in
+      if c <> 0 then c else go (i + 1))
+  in
+  go 0
+;;
+
+let equal eq a b =
+  let len_a = length a
+  and len_b = length b in
+  len_a = len_b
+  &&
+  let rec go i = i >= len_a || (eq (unsafe_get a i) (unsafe_get b i) && go (i + 1)) in
+  go 0
+;;
+
+let hash hash_elt v =
+  let len = length v in
+  let h = ref (Hashtbl.hash len) in
+  for i = 0 to len - 1 do
+    h := Hashtbl.seeded_hash !h (hash_elt (unsafe_get v i))
+  done;
+  !h
+;;
+
+let t_of_sexp : (Core.Sexp.t -> 'a) -> Core.Sexp.t -> 'a t =
+  let open Core in
+  fun f sexp -> Array.t_of_sexp f sexp |> of_array
+;;
+
+let sexp_of_t : ('a -> Core.Sexp.t) -> 'a t -> Core.Sexp.t =
+  let open Core in
+  fun f self -> to_array self |> Array.sexp_of_t f
+;;
+
 let%test "push increases length" =
   let v = create () in
   push v 1;

@@ -14,89 +14,88 @@ let over_literal (f : 'a -> 'b) : 'a Term.literal -> 'b Term.literal = function
 let rec eval : Term.t -> Term.value Context.t =
   fun tm ->
   Context.trace Trace.Eval tm [%here]
-  @@ match tm with
-     | `Var name ->
-       Context.lookup_value name
-       >>= (function
-        | Some `Opaque -> Context.pure @@ `Neutral (NVar (0, name))
-        | Some other -> Context.pure other
-        | None -> Context.pure @@ `Neutral (NVar (0, name)))
-     | `Ann (e, _) -> eval e
-     | `Type -> Context.pure `Type
-     | `Pi { plicity; ident; dom; cod } ->
-       let* dom_val = eval dom in
-       (* Capture current environment for lexical scoping *)
-       let* cod =
-         Context.close ~f:(fun value ->
-           Context.local ~f:(Context.with_binding ident ~value ~typ:dom_val) (eval cod))
-       in
-       Context.pure @@ `Pi (plicity, ident, dom_val, cod)
-     | `Lam (plicity, x, body) ->
-       let* body =
-         Context.close ~f:(fun value ->
-           Context.local ~f:(Context.with_binding x ~value) (eval body))
-       in
-       Context.pure @@ `Lam (plicity, x, body)
-     | `App (f, x) ->
-       let* f = eval f in
-       let* x = eval x in
-       app f x
-     | `Infix { left; op; right } ->
-       let* op_val = eval op in
-       let* left_val = eval left in
-       let* right_val = eval right in
-       app op_val left_val >>= Fun.flip app right_val
-     | `Let (ident, Some ty, value, body) ->
-       let* typ = eval ty in
-       let* value = eval value in
-       Context.local ~f:(Context.with_binding ident ~value ~typ) (eval body)
-     | `Let (ident, None, value, body) ->
-       let* value = eval value in
-       Context.local ~f:(Context.with_binding ident ~value) (eval body)
-     | `Match (scrut, arms) ->
-       let* scrut = eval scrut in
-       let* arms =
+  @@
+  match tm with
+  | `Var name ->
+    Context.lookup_value name
+    >>= (function
+     | Some `Opaque -> Context.pure @@ `Neutral (NVar (0, name))
+     | Some other -> Context.pure other
+     | None -> Context.pure @@ `Neutral (NVar (0, name)))
+  | `Ann (e, _) -> eval e
+  | `Type -> Context.pure `Type
+  | `Pi { plicity; ident; dom; cod } ->
+    let* dom_val = eval dom in
+    (* Capture current environment for lexical scoping *)
+    let* cod =
+      Context.close ~f:(fun value ->
+        Context.local ~f:(Context.with_binding ident ~value ~typ:dom_val) (eval cod))
+    in
+    Context.pure @@ `Pi (plicity, ident, dom_val, cod)
+  | `Lam (plicity, x, body) ->
+    let* body =
+      Context.close ~f:(fun value ->
+        Context.local ~f:(Context.with_binding x ~value) (eval body))
+    in
+    Context.pure @@ `Lam (plicity, x, body)
+  | `App (f, x) ->
+    let* f = eval f in
+    let* x = eval x in
+    app f x
+  | `Infix { left; op; right } ->
+    let* op_val = eval op in
+    let* left_val = eval left in
+    let* right_val = eval right in
+    app op_val left_val >>= Fun.flip app right_val
+  | `Let (ident, Some ty, value, body) ->
+    let* typ = eval ty in
+    let* value = eval value in
+    Context.local ~f:(Context.with_binding ident ~value ~typ) (eval body)
+  | `Let (ident, None, value, body) ->
+    let* value = eval value in
+    Context.local ~f:(Context.with_binding ident ~value) (eval body)
+  | `Match (scrut, arms) ->
+    let* scrut = eval scrut in
+    let* arms =
+      Context.traverse
+        ~f:(fun (pat, body) ->
+          let* pat = pattern pat in
+          let* body = eval body in
+          Context.pure (pat, body))
+        arms
+    in
+    Context.pure @@ `Match (scrut, arms)
+  | `Pos (pos, exp) -> Context.local ~f:(Context.with_pos pos) (eval exp)
+  | `Lit lit ->
+    (match lit with
+     | Record fields ->
+       let* fields =
          Context.traverse
-           ~f:(fun (pat, body) ->
-             let* pat = pattern pat in
-             let* body = eval body in
-             Context.pure (pat, body))
-           arms
+           ~f:(fun (ident, value) ->
+             let* value = eval value in
+             Context.pure (ident, value))
+           (Map.to_alist fields)
        in
-       Context.pure @@ `Match (scrut, arms)
-     | `Pos (pos, exp) -> Context.local ~f:(Context.with_pos pos) (eval exp)
-     | `Lit lit ->
-       (match lit with
-        | Record fields ->
-          let* fields =
-            Context.traverse
-              ~f:(fun (ident, value) ->
-                let* value = eval value in
-                Context.pure (ident, value))
-              (Map.to_alist fields)
-          in
-          Context.pure @@ `Lit (Record (Ident.Map.of_alist_exn fields))
-        | Int n -> Context.pure @@ `Lit (Int n)
-        | UInt n -> Context.pure @@ `Lit (UInt n)
-        | Float x -> Context.pure @@ `Lit (Float x)
-        | Bool b -> Context.pure @@ `Lit (Bool b))
-     | `Meta m -> Context.pure @@ `Neutral (NMeta m)
-     | `Err e -> Context.pure @@ `Err e
-     | `RecordType { fields; tail } ->
-       let* fields = Context.traverse_map ~f:eval fields in
-       let* tail : Term.value option =
-         match tail with
-         | Some tail -> Context.map ~f:Option.some @@ eval tail
-         | None -> Context.pure None
-       in
-       Context.pure (`RecordType { fields; tail } : Term.value)
-     | `SumType { ident; params; constructors; position } ->
-       let* params = Context.traverse_map ~f:eval params in
-       let* constructors =
-         Context.traverse_map ~f:(Context.traverse ~f:eval) constructors
-       in
-       Context.pure @@ `SumType { ident; params; constructors; position }
-     | `Proj (term, field) -> eval term >>= proj field
+       Context.pure @@ `Lit (Record (Ident.Map.of_alist_exn fields))
+     | Int n -> Context.pure @@ `Lit (Int n)
+     | UInt n -> Context.pure @@ `Lit (UInt n)
+     | Float x -> Context.pure @@ `Lit (Float x)
+     | Bool b -> Context.pure @@ `Lit (Bool b))
+  | `Meta m -> Context.pure @@ `Neutral (NMeta m)
+  | `Err e -> Context.pure @@ `Err e
+  | `RecordType { fields; tail } ->
+    let* fields = Context.traverse_map ~f:eval fields in
+    let* tail : Term.value option =
+      match tail with
+      | Some tail -> Context.map ~f:Option.some @@ eval tail
+      | None -> Context.pure None
+    in
+    Context.pure (`RecordType { fields; tail } : Term.value)
+  | `SumType { ident; params; constructors; position } ->
+    let* params = Context.traverse_map ~f:eval params in
+    let* constructors = Context.traverse_map ~f:(Context.traverse ~f:eval) constructors in
+    Context.pure @@ `SumType { ident; params; constructors; position }
+  | `Proj (term, field) -> eval term >>= proj field
 
 and app : value -> value -> value Context.t =
   fun f x ->
@@ -198,72 +197,73 @@ and pattern_bindings
 let rec quote : int -> Term.value -> Term.t Context.t =
   fun lvl tm ->
   Context.trace Trace.Quote tm [%here]
-  @@ match tm with
-     | `App (f, x) ->
-       let* f = quote lvl f in
-       let* x = quote lvl x in
-       Context.pure @@ `App (f, x)
-     | `Neutral n -> quote_neutral lvl n
-     | `Type -> Context.pure `Type
-     | `Pi (plicity, ident, dom, cod) ->
-       (* level shouldn't matter here because [var] is just used to access the body of [cod] *)
-       let var = `Neutral (NVar (lvl, ident)) in
-       let* dom = quote lvl dom in
-       let* cod = Context.liftR (cod var) >>= quote (succ lvl) in
-       Context.pure @@ `Pi { plicity; ident; dom; cod }
-     | `Lam (plicity, x, b) ->
-       let var = `Neutral (NVar (0, x)) in
-       let* body = Context.liftR (b var) >>= quote (succ lvl) in
-       Context.pure @@ `Lam (plicity, x, body)
-     | `Lit lit ->
-       (match lit with
-        | Record fields ->
-          let* fields = Context.traverse_map ~f:(quote lvl) fields in
-          Context.pure @@ `Lit (Record fields)
-        | Int n -> Context.pure @@ `Lit (Int n)
-        | UInt n -> Context.pure @@ `Lit (UInt n)
-        | Float x -> Context.pure @@ `Lit (Float x)
-        | Bool b -> Context.pure @@ `Lit (Bool b))
-     | `RecordType { fields; tail } ->
+  @@
+  match tm with
+  | `App (f, x) ->
+    let* f = quote lvl f in
+    let* x = quote lvl x in
+    Context.pure @@ `App (f, x)
+  | `Neutral n -> quote_neutral lvl n
+  | `Type -> Context.pure `Type
+  | `Pi (plicity, ident, dom, cod) ->
+    (* level shouldn't matter here because [var] is just used to access the body of [cod] *)
+    let var = `Neutral (NVar (lvl, ident)) in
+    let* dom = quote lvl dom in
+    let* cod = Context.liftR (cod var) >>= quote (succ lvl) in
+    Context.pure @@ `Pi { plicity; ident; dom; cod }
+  | `Lam (plicity, x, b) ->
+    let var = `Neutral (NVar (0, x)) in
+    let* body = Context.liftR (b var) >>= quote (succ lvl) in
+    Context.pure @@ `Lam (plicity, x, body)
+  | `Lit lit ->
+    (match lit with
+     | Record fields ->
        let* fields = Context.traverse_map ~f:(quote lvl) fields in
-       let* tail =
-         match tail with
-         | Some tail -> Context.map ~f:Option.some @@ quote lvl tail
-         | None -> Context.pure None
-       in
-       Context.pure @@ (`RecordType { fields; tail } : Term.t)
-     | `SumType { ident; params; constructors; position } ->
-       let* params = Context.traverse_map ~f:(quote lvl) params in
-       let* constructors =
-         Context.traverse_map ~f:(Context.traverse ~f:(quote lvl)) constructors
-       in
-       Context.pure @@ `SumType { ident; params; constructors; position }
-     | `Err e -> Context.pure @@ `Err e
-     | `Opaque -> failwith "Cannot quote opaque values, they should not appear here"
-     | `Infix { left; op; right } ->
-       let* left = quote lvl left in
-       let* op = quote lvl op in
-       let* right = quote lvl right in
-       Context.pure @@ `Infix { left; op; right }
-     | `Var i -> Context.pure @@ `Var i
-     | `Match (scrut, arms) ->
-       let* scrut = quote lvl scrut in
-       let* arms =
-         Context.traverse
-           ~f:(fun (ptn, arm) ->
-             let* ptn = quote_pattern lvl ptn in
-             let* arm = quote lvl arm in
-             Context.pure (ptn, arm))
-           arms
-       in
-       Context.pure @@ `Match (scrut, arms)
-     | `Ann (tm, typ) ->
-       let* tm = quote lvl tm in
-       let* typ = quote lvl typ in
-       Context.pure @@ `Ann (tm, typ)
-     | `Proj (tm, field) ->
-       let* tm = quote lvl tm in
-       Context.pure @@ `Proj (tm, field)
+       Context.pure @@ `Lit (Record fields)
+     | Int n -> Context.pure @@ `Lit (Int n)
+     | UInt n -> Context.pure @@ `Lit (UInt n)
+     | Float x -> Context.pure @@ `Lit (Float x)
+     | Bool b -> Context.pure @@ `Lit (Bool b))
+  | `RecordType { fields; tail } ->
+    let* fields = Context.traverse_map ~f:(quote lvl) fields in
+    let* tail =
+      match tail with
+      | Some tail -> Context.map ~f:Option.some @@ quote lvl tail
+      | None -> Context.pure None
+    in
+    Context.pure @@ (`RecordType { fields; tail } : Term.t)
+  | `SumType { ident; params; constructors; position } ->
+    let* params = Context.traverse_map ~f:(quote lvl) params in
+    let* constructors =
+      Context.traverse_map ~f:(Context.traverse ~f:(quote lvl)) constructors
+    in
+    Context.pure @@ `SumType { ident; params; constructors; position }
+  | `Err e -> Context.pure @@ `Err e
+  | `Opaque -> failwith "Cannot quote opaque values, they should not appear here"
+  | `Infix { left; op; right } ->
+    let* left = quote lvl left in
+    let* op = quote lvl op in
+    let* right = quote lvl right in
+    Context.pure @@ `Infix { left; op; right }
+  | `Var i -> Context.pure @@ `Var i
+  | `Match (scrut, arms) ->
+    let* scrut = quote lvl scrut in
+    let* arms =
+      Context.traverse
+        ~f:(fun (ptn, arm) ->
+          let* ptn = quote_pattern lvl ptn in
+          let* arm = quote lvl arm in
+          Context.pure (ptn, arm))
+        arms
+    in
+    Context.pure @@ `Match (scrut, arms)
+  | `Ann (tm, typ) ->
+    let* tm = quote lvl tm in
+    let* typ = quote lvl typ in
+    Context.pure @@ `Ann (tm, typ)
+  | `Proj (tm, field) ->
+    let* tm = quote lvl tm in
+    Context.pure @@ `Proj (tm, field)
 
 and quote_pattern (lvl : int) : Term.value Term.pattern -> Term.t Term.pattern Context.t
   = function

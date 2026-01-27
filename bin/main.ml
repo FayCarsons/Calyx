@@ -46,6 +46,35 @@ let format path =
       (pos.pos_cnum - pos.pos_bol)
 ;;
 
+let step backend path =
+  let (module Backend : Codegen.M) = impl_of_backend backend in
+  match
+    Stepper.run ~f:(fun () ->
+      let result, _ =
+        Context.run
+          (Context.from_bindings Backend.standard_library)
+          (let open Context.Syntax in
+           let contents = In_channel.read_all path in
+           let* toplevels =
+             Parse.run contents
+             |> Result.map_error ~f:(fun e -> `Parser e)
+             |> Context.liftR
+           in
+           let desugared = List.map ~f:Term.desugar_toplevel toplevels in
+           let* inferred = Checker.infer_toplevel desugared in
+           Context.pure inferred)
+      in
+      result)
+  with
+  | Ok inferred ->
+    Printf.printf "Type checking succeeded with %d declarations\n" (List.length inferred)
+  | Error es ->
+    Printf.printf
+      "Type checking failed:\n%s\n"
+      (String.concat ~sep:"\n" @@ List.map ~f:CalyxError.show es)
+  | exception Trace.Trace_aborted -> print_endline "Goodbye :3"
+;;
+
 let path =
   let open Cmdliner in
   let doc = "The path of the file you would like to compile" in
@@ -78,19 +107,26 @@ let format_cmd =
   Cmd.v info Term.(const format $ path)
 ;;
 
+let step_cmd =
+  let open Cmdliner in
+  let doc = "Interactively step through type checking" in
+  let info = Cmd.info "step" ~doc in
+  Cmd.v info Term.(const step $ backend $ path)
+;;
+
 let _lsp_command =
   let open Cmdliner in
   let doc = "Start LSP server" in
   let _info = Cmd.info "LSP" ~doc in
   (* TODO: make it work !! *)
-  assert false
+  ()
 ;;
 
 let main_cmd =
   let open Cmdliner in
   let doc = "Calyx compiler and tools" in
   let info = Cmd.info "calyx" ~doc in
-  Cmd.group info [ compile_cmd; format_cmd ]
+  Cmd.group info [ compile_cmd; format_cmd; step_cmd ]
 ;;
 
 let () = exit (Cmdliner.Cmd.eval main_cmd)

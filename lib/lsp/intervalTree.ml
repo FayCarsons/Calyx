@@ -162,10 +162,7 @@ module PosKey : Key with type t = Pos.t = struct
     if cmp_lo <> 0 then cmp_lo else Int.compare a.Pos.hi.column b.Pos.hi.column
   ;;
 
-  let equal a b =
-    a.Pos.lo.column = b.Pos.lo.column && a.Pos.hi.column = b.Pos.hi.column
-  ;;
-
+  let equal a b = a.Pos.lo.column = b.Pos.lo.column && a.Pos.hi.column = b.Pos.hi.column
   let low t = t.Pos.lo.column
   let high t = t.Pos.hi.column
 end

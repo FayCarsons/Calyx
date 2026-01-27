@@ -41,3 +41,4 @@ target/
 
 # Design docs (private for now)
 design/
+.direnv

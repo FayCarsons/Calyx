@@ -7,12 +7,12 @@ This is in early stages, only a few weeks old: we are currently compiling to JS 
 Calyx is not intended to be a proof assistant. Its type system is motivated by the desire to avoid awkward constructs like kind systems, const generics, and GADTs. Many of the features that motivate these constructs fall out of simple Normalization by Evaluation style type checkers, Calyx aims to leverage that.
 
 Planned features include:
-- Row polymorphic records
-- Implicit modules for ad-hoc polymorphism
-- First-class lenses
-- Algebraic effects
-- Partial evaluation and compile-time reflection in place of macros
-- A simple 'Prop' sort for refinement types
+- [x] Row polymorphic records
+- [ ] Implicit modules for ad-hoc polymorphism
+- [ ] First-class lenses
+- [ ] Algebraic effects
+- [ ] Partial evaluation and compile-time reflection in place of macros
+- [ ] A simple 'Prop' sort for refinement types
 
 # Usage
 

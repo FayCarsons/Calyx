@@ -1,6 +1,22 @@
-def always {a, b} (fst : a) (snd : b) -> b do snd
+-- Let polymorphism with explicit signature
+def explicit () -> Bool do
+  let id : {a : Type} -> a -> a = \x -> x in
+  let t = id 67 in
+  let f = id False in
+  f
 
-def main () -> Int do
-  let id = \x -> x in
-  always (id True) (id 0)
+{-
+-- Let polymorphism with implicit signature, this should **fail** as of
+-- 1/28/2026. General let-polymorphism w/ inference is in the roadmap
+-- though
 
+def implicit () -> Bool do 
+  let id = \x -> x in 
+  let t = id 67 in 
+  let f = id False in 
+  f
+-}
+
+-- stub
+def main () -> Int do 0
+  

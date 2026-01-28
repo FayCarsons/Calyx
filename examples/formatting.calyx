@@ -9,6 +9,10 @@ data MySumType (a : Type) (b : Type) where
 | Left a
 | Right b
 
+data List (a : Type) where 
+| Cons a (List a)
+| Nil
+
 const secretNumber : Int = 42
 
 def aSmallRecord (a : { x : Int, y : Int | r }) -> Int do 
@@ -21,7 +25,7 @@ def map {a, b} (f : a -> b) (xs : List a) -> List b do
     -- Nested match blocks should be delimited with 'end' to disambiguate
     match xs with 
     | Nil -> Nil
-    | Cons x xs -> fail
+    | Cons x xs -> Nil
     end
   | Cons x xs -> Cons (f x) (map f xs)
 

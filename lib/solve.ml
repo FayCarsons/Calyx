@@ -3,23 +3,44 @@ open Context.Syntax
 open Term
 module Meta = Meta
 
-let rec force : value -> value Context.t = function
-  | `Neutral (NMeta m) as v ->
-    (match m.Meta.solution with
-     | Some solution -> force solution
-     | None -> Context.pure v)
-  | `Neutral (NVar (_, ident)) as v ->
-    (* Try to look up the variable in the environment *)
-    let* value = Context.lookup_value ident in
-    (match value with
-     | Some ((`Var ident' | `Neutral (NVar (_, ident'))) as v') ->
-       if Ident.equal ident ident'
-       then Context.pure v
-       (* Self-referential, keep as is *)
-       else force v'
-     | Some `Opaque -> Context.pure v (* Don't resolve opaque types, keep as NVar *)
-     | _ -> Context.pure v)
-  | v -> Context.pure v
+let force : value -> value Context.t =
+  fun value ->
+  (* NOTE: Fetching the context here places the rest of the function inside 
+     the Context.t monad, which is necessary otherwise we have some 
+     heisenbug where meta state can become stale
+  *)
+  let* ctx = Context.ask in
+  let rec go v =
+    match v with
+    | `Neutral (NMeta m) ->
+      (match m.Meta.solution with
+       | Some solution -> go solution
+       | None -> v)
+    | `Neutral (NVar (_, ident)) as var ->
+      (* Look up variable, but only follow Var/NVar chains.
+               For any other value type, return the original var. *)
+      let bound =
+        match Map.find ctx.bindings ident with
+        | Some (Context.Typed (v', _)) -> Some v'
+        | Some (Context.Untyped v') -> Some v'
+        | None -> None
+      in
+      (match bound with
+       | Some (`Var ident' | `Neutral (NVar (_, ident'))) when Ident.equal ident ident' ->
+         (* Self-reference, return original *)
+         var
+       | Some ((`Var _ | `Neutral (NVar _)) as v') ->
+         (* Another var/nvar, follow the chain *)
+         go v'
+       | Some `Opaque ->
+         (* Opaque type, return original *)
+         var
+       | _ ->
+         (* Any other value or not found, return original var *)
+         var)
+    | v -> v
+  in
+  Context.pure @@ go value
 ;;
 
 let rec occurs (m : Meta.t) (v : value) : bool Context.t =
@@ -163,8 +184,8 @@ and unify_record_literals : value Ident.Map.t -> value Ident.Map.t -> unit Conte
   then (
     let a' = Map.to_alist a
     and b' = Map.to_alist b in
-    (* FIXME: Instead of relying on 'unify' to emit an error, we should make 
-       this whole check fallible and, on failure, emit a more descriptive 
+    (* FIXME: Instead of relying on 'unify' to emit an error, we should make
+       this whole check fallible and, on failure, emit a more descriptive
        "these" records don't match error *)
     List.zip_exn a' b'
     |> Context.traverse ~f:(fun ((_, a), (_, b)) -> unify a b)
@@ -278,25 +299,27 @@ let pretty_solver_error = function
       (String.concat ~sep:",\n" @@ List.map ~f:CalyxError.show es)
 ;;
 
-let rec solve (initial : Constraint.t list) : unit Context.t =
+let rec solve : unit -> unit Context.t =
+  fun () ->
   let open Context.Syntax in
+  let* constraints = Context.take_constraints in
   let progressed =
-    Context.map ~f:(List.exists ~f:Fun.id) (Context.traverse ~f:solve_one initial)
+    Context.map ~f:(List.exists ~f:Fun.id) (Context.traverse ~f:solve_one constraints)
   in
-  let* next = Context.get_constraints in
   progressed
   >>= function
-  | _ when List.is_empty next -> Context.pure ()
-  | true -> solve next
+  | true ->
+    let* has_constraints = Context.has_constraints in
+    if has_constraints then solve () else Context.pure ()
   | false ->
+    let* constraints = Context.take_constraints in
     Context.fail
       (`Stuck
-          (List.map ~f:(Fun.compose Sexp.to_string_hum Constraint.sexp_of_t) next
+          (List.map ~f:(Fun.compose Sexp.to_string_hum Constraint.sexp_of_t) constraints
            |> String.concat ~sep:"\n"))
 
 and solve_one : Constraint.t -> bool Context.t = function
-  | Equals (a, b) ->
-    unify a b |> Context.map ~f:(Fun.const true) |> Context.fallible ~default:true
+  | Equals (a, b) -> unify a b |> Context.map ~f:(Fun.const true)
   | Subtype { sub; super } ->
     (* Printf.printf "SOLVING SUBTYPE '%s' :> '%s'" (Term.show_value a) (Term.show_value b); *)
     subsumes ~sub ~super
@@ -339,8 +362,8 @@ and solve_record
           Context.pure true))
   | `Neutral (NMeta m) ->
     (* Solve meta to a record type with this field and an open tail *)
-    let* level = Context.level in
-    let fresh_tail = `Neutral (NMeta (Meta.fresh level)) in
+    let* meta = Context.fresh_meta in
+    let fresh_tail = `Neutral (NMeta meta) in
     let record_type : Term.value =
       `RecordType
         { fields = Ident.Map.singleton field_name field_type; tail = Some fresh_tail }

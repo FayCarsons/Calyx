@@ -208,7 +208,7 @@ let render_line state line =
       let status_s =
         match outcome with
         | Trace.Succeeded _ -> "OK"
-        | Trace.Failed _ -> "FAIL"
+        | Trace.Failed err -> Printf.sprintf "FAIL: '%s'" (CalyxError.show err)
       in
       stage_s, loc_s, status_s
   in

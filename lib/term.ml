@@ -353,13 +353,5 @@ module Meta = struct
 
   let equal a b = Id.equal a.id b.id && Int.equal a.level b.level
   let show = Fun.compose Sexplib.Sexp.to_string_hum sexp_of_t
-
-  let fresh =
-    let counter = ref (-1) in
-    fun level ->
-      incr counter;
-      { id = !counter; level; solution = None }
-  ;;
-
   let solve m v = m.solution <- Some v
 end

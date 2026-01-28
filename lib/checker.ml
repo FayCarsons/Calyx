@@ -327,8 +327,8 @@ let rec infer : Term.t -> (Term.value * Term.t) Context.t =
     let* typ = quote 0 result_ty in
     Context.pure (result_ty, `Ann (annotated_term, typ))
   | `Pi { plicity; ident; dom; cod } ->
-    let* value = check dom `Type >>= eval in
-    let* _ = Context.local ~f:(Context.with_binding ident ~value) (check cod `Type) in
+    let* dom_val = check dom `Type >>= eval in
+    let* _ = Context.with_var ident ~typ:dom_val ~f:(fun _var -> check cod `Type) in
     Context.pure (`Type, `Pi { plicity; ident; dom; cod })
   | `Lam (plicity, x, body) ->
     let* meta = Context.fresh_meta in
@@ -343,8 +343,7 @@ let rec infer : Term.t -> (Term.value * Term.t) Context.t =
       let* tf = Solve.force tf in
       match tf with
       | `Pi (Implicit, _ident, dom, cod) ->
-        let* level = Context.level in
-        let meta = Meta.fresh level in
+        let* meta = Context.fresh_meta in
         let meta_val = `Neutral (NMeta meta) in
         let* quoted_dom = quote 0 dom in
         let new_f = `App (f, `Ann (`Meta meta, quoted_dom)) in
@@ -356,9 +355,10 @@ let rec infer : Term.t -> (Term.value * Term.t) Context.t =
         let* quoted_ty = quote 0 result_ty in
         Context.pure (result_ty, `Ann (`App (f, x'), quoted_ty))
       | `Neutral (NMeta _) ->
-        let* level = Context.level in
-        let dom = `Neutral (NMeta (Meta.fresh level)) in
-        let cod = `Neutral (NMeta (Meta.fresh level)) in
+        let* dom_meta = Context.fresh_meta in
+        let* cod_meta = Context.fresh_meta in
+        let dom = `Neutral (NMeta dom_meta) in
+        let cod = `Neutral (NMeta cod_meta) in
         let* _ =
           Context.tell_constraint
             (Constraint.equals

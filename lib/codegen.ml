@@ -282,7 +282,17 @@ module Javascript : M = struct
     let open Term in
     Ident.Map.of_alist_exn
       [ Intern.intern "Int", Context.Typed (`Opaque, `Type)
-      ; Intern.intern "Bool", Context.Typed (`Opaque, `Type)
+      ; ( Intern.intern "Bool"
+        , Context.Typed
+            ( `SumType
+                { ident = Intern.intern "Bool"
+                ; params = Ident.Map.empty
+                ; constructors =
+                    Ident.Map.of_alist_exn
+                      [ Intern.intern "True", []; Intern.intern "False", [] ]
+                ; position = Pos.pos_empty, Pos.pos_empty
+                }
+            , `Type ) )
       ; Intern.intern "Unit", Context.Typed (`Opaque, `Type)
       ; ( Intern.intern "+"
         , Context.Typed

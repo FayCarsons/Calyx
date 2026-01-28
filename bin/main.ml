@@ -16,9 +16,9 @@ let backend_of_string = function
   | other -> Error (`Msg (Printf.sprintf "Unsupported backend '%s'" other))
 ;;
 
-let build backend path =
+let build backend trace path =
   let (module Backend : Codegen.M) = impl_of_backend backend in
-  let compiler_output = Runner.compile (module Backend) path in
+  let compiler_output = Runner.compile ~trace (module Backend) path in
   match compiler_output with
   | Ok output -> print_endline output
   | Error es ->
@@ -27,9 +27,9 @@ let build backend path =
       (String.concat ~sep:"\n" @@ List.map ~f:CalyxError.show es)
 ;;
 
-let run backend path =
+let run backend trace path =
   let (module Backend : Codegen.M) = impl_of_backend backend in
-  let compiler_output = Runner.compile (module Backend) path in
+  let compiler_output = Runner.compile ~trace (module Backend) path in
   match compiler_output with
   | Ok compiler_output ->
     Runner.output_to_file ~extension:Backend.extension ~compiler_output;
@@ -62,18 +62,16 @@ let step backend path =
   let source = In_channel.read_all path in
   match
     Stepper.run ~source ~f:(fun () ->
-      let result, _ =
-        Context.run
-          (Context.from_bindings Backend.standard_library)
-          (let open Context.Syntax in
-           let* toplevels =
-             Parse.run source |> Result.map_error ~f:(fun e -> `Parser e) |> Context.liftR
-           in
-           let desugared = List.map ~f:Term.desugar_toplevel toplevels in
-           let* inferred = Checker.infer_toplevel desugared in
-           Context.pure inferred)
-      in
-      result)
+      Context.run
+        (Context.from_bindings Backend.standard_library)
+        (let open Context.Syntax in
+         let* toplevels =
+           Parse.run source |> Result.map_error ~f:(fun e -> `Parser e) |> Context.liftR
+         in
+         let desugared = List.map ~f:Term.desugar_toplevel toplevels in
+         let* inferred = Checker.infer_toplevel desugared in
+         Context.pure inferred)
+      |> fst)
   with
   | Ok inferred ->
     Printf.printf "Type checking succeeded with %d declarations\n" (List.length inferred)
@@ -102,18 +100,24 @@ let backend =
   Arg.(value & opt backend_conv JS & info [ "b"; "backend" ] ~doc ~docv:"BACKEND")
 ;;
 
+let trace =
+  let open Cmdliner in
+  let doc = "Enable tracing output" in
+  Arg.(value & flag & info [ "t"; "trace" ] ~doc)
+;;
+
 let build_cmd =
   let open Cmdliner in
   let doc = "Compile program" in
   let info = Cmd.info "build" ~doc in
-  Cmd.v info Term.(const build $ backend $ path)
+  Cmd.v info Term.(const build $ backend $ trace $ path)
 ;;
 
 let run_cmd =
   let open Cmdliner in
   let doc = "Compile and run program" in
   let info = Cmd.info "run" ~doc in
-  Cmd.v info Term.(const run $ backend $ path)
+  Cmd.v info Term.(const run $ backend $ trace $ path)
 ;;
 
 let format_cmd =

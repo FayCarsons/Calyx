@@ -1,3 +1,7 @@
+module U = Unix
+open Core
+module Unix = U
+
 let mkdir path =
   try Unix.mkdir path 0o755 with
   | Unix.Unix_error (Unix.EEXIST, _, _) -> ()
@@ -34,7 +38,7 @@ let execute (module Backend : Codegen.M) (cmd : string) =
 
 let print_ast_sexp =
   let ( >> ) = Fun.compose in
-  print_newline
+  (fun () -> Out_channel.(newline stdout))
   >> print_endline
   >> Sexplib.Sexp.to_string_hum
   >> Term.sexp_of_declaration Term.sexp_of_t
@@ -50,24 +54,19 @@ let compile
       Context.run
         (Context.from_bindings Backend.standard_library)
         (let open Context.Syntax in
-         let contents = In_channel.open_text path |> In_channel.input_all in
+         let contents = In_channel.read_all path in
          let* toplevels =
-           Parse.run contents |> Result.map_error (fun e -> `Parser e) |> Context.liftR
+           Parse.run contents |> Result.map_error ~f:(fun e -> `Parser e) |> Context.liftR
          in
-         let desugared = List.map Term.desugar_toplevel toplevels in
-         (* print_endline "Desugared:"; *)
-         (* List.iter print_ast_sexp desugared; *)
-         let* inferred = Checker.infer_toplevel desugared in
-         (* print_endline "Inferred:"; *)
-         (* List.iter print_ast_sexp inferred; *)
+         let desugared = List.map toplevels ~f:Term.desugar_toplevel in
+         let resolved, _dependency_graph = Resolve.resolve_program desugared in
+         let* inferred = Checker.infer_toplevel resolved in
+         let* _ = Solve.solve () in
          let* zonked = Context.traverse ~f:Zonk.zonk_toplevel inferred in
          let* errors = Context.errors in
+         List.iter errors ~f:(fun e -> Printf.printf "Error: %s\n" (CalyxError.show e));
          assert (List.is_empty errors);
-         (* print_endline "Zonked:"; *)
-         (* List.iter print_ast_sexp zonked; *)
          let ir = Ir.convert zonked in
-         (* print_endline "IR:"; *)
-         (* List.iter (Fun.compose print_string Ir.PrettyIR.declaration) ir; *)
          Context.pure @@ Backend.compile ir)
     in
     result)

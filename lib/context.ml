@@ -107,10 +107,19 @@ let tell_constraint : Constraint.t -> unit t =
   { run = (fun ctx ok _err -> ok () { ctx with constraints = c :: ctx.constraints }) }
 ;;
 
-let get_constraints : Constraint.t list t = asks (fun ctx -> ctx.constraints)
+let take_constraints : Constraint.t list t =
+  { run = (fun ctx ok _ -> ok ctx.constraints { ctx with constraints = [] }) }
+;;
 
-let clear_constraints : unit t =
-  { run = (fun ctx ok _err -> ok () { ctx with constraints = [] }) }
+let has_constraints : bool t =
+  { run =
+      (fun ctx ok _ ->
+        ok
+          (match ctx.constraints with
+           | _ :: _ -> true
+           | _ -> false)
+          ctx)
+  }
 ;;
 
 let fresh_meta : Term.Meta.t t =

@@ -26,13 +26,58 @@ open Term
 open Core
 module IdentSet = Set.Make (Ident)
 
+(* Extract the plicity spine from a type - sequence of (plicity, ident) from nested Pis *)
+let rec pi_spine : t -> (plicity * Ident.t) list = function
+  | `Pi { plicity; ident; cod; _ } -> (plicity, ident) :: pi_spine cod
+  | `Pos (_, t) -> pi_spine t
+  | _ -> []
+;;
+
+(* Extract the plicity spine from a lambda - sequence of (plicity, ident) from nested Lams *)
+let rec lam_spine : t -> (plicity * Ident.t) list = function
+  | `Lam (plicity, ident, body) -> (plicity, ident) :: lam_spine body
+  | `Pos (_, t) -> lam_spine t
+  | _ -> []
+;;
+
+(* Find implicit parameters at the front of the type spine that are missing from the term spine.
+   For `{a : Type} -> a -> a` with `\x -> x`, returns [a] since the implicit is missing. *)
+let rec find_missing_implicits type_spine term_spine =
+  match type_spine, term_spine with
+  | (Implicit, _) :: type_rest, (Implicit, _) :: term_rest ->
+    (* Both have implicit at front, consume both *)
+    find_missing_implicits type_rest term_rest
+  | (Implicit, ident) :: type_rest, _ ->
+    (* Type has implicit but term doesn't - collect it *)
+    ident :: find_missing_implicits type_rest term_spine
+  | (Explicit, _) :: type_rest, (Explicit, _) :: term_rest ->
+    (* Both explicit, continue matching *)
+    find_missing_implicits type_rest term_rest
+  | _ -> []
+;;
+
+(* Insert implicit lambdas at the front of a term based on the type's Pi spine *)
+let insert_implicit_lams (typ : t) (term : t) : t =
+  let type_spine = pi_spine typ in
+  let term_spine = lam_spine term in
+  let missing = find_missing_implicits type_spine term_spine in
+  List.fold_right missing ~init:term ~f:(fun ident acc -> `Lam (Implicit, ident, acc))
+;;
+
+type dependencies = IdentSet.t Ident.Map.t
+
 type traversal =
   { scope : IdentSet.t
-  ; dependencies : IdentSet.t Ident.Map.t
+  ; dependencies : dependencies
   ; toplevel : Ident.t
   }
 
-let empty toplevel = { scope = IdentSet.empty; dependencies = Ident.Map.empty; toplevel }
+let empty =
+  { scope = IdentSet.empty
+  ; dependencies = Ident.Map.empty
+  ; toplevel = Ident.Intern.underscore
+  }
+;;
 
 let merge : traversal -> traversal -> traversal =
   fun a b ->
@@ -129,6 +174,12 @@ let resolve_expr : traversal -> t -> t * traversal =
           Some typ, state
         | None -> None, state
       in
+      (* Insert implicit lambdas if we have a type annotation *)
+      let value =
+        match typ with
+        | Some typ -> insert_implicit_lams typ value
+        | None -> value
+      in
       let value, state_value = go { state with scope = new_scope } value in
       let body, state_body = go { state with scope = new_scope } body in
       let new_state = merge state_typ (merge state_value state_body) in
@@ -183,10 +234,23 @@ let resolve_toplevel : traversal -> t declaration -> t declaration * traversal =
   match decl with
   | Function { ident; typ; body; position } ->
     let new_state = { state with toplevel = ident; scope = Set.add state.scope ident } in
-    let typ, state_typ = resolve_expr new_state typ
-    and body, state_body = resolve_expr new_state body in
+    let typ, state_typ = resolve_expr new_state typ in
+    (* Insert implicit lambdas based on the type signature *)
+    let body = insert_implicit_lams typ body in
+    let body, state_body = resolve_expr new_state body in
     let state = merge state_typ state_body in
     let state = { state with scope = state.scope } in
     Function { ident; typ; body; position }, state
   | _ -> decl, state
+;;
+
+let resolve_program : t declaration list -> t declaration list * dependencies =
+  fun decls ->
+  let init_state = empty in
+  let state, resolved =
+    List.fold_map decls ~init:init_state ~f:(fun state decl ->
+      let decl', state' = resolve_toplevel state decl in
+      state', decl')
+  in
+  resolved, state.dependencies
 ;;

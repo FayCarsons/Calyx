@@ -105,21 +105,21 @@ let backend =
 let build_cmd =
   let open Cmdliner in
   let doc = "Compile program" in
-  let info = Cmd.info "BUILD" ~doc in
+  let info = Cmd.info "build" ~doc in
   Cmd.v info Term.(const build $ backend $ path)
 ;;
 
 let run_cmd =
   let open Cmdliner in
   let doc = "Compile and run program" in
-  let info = Cmd.info "RUN" ~doc in
+  let info = Cmd.info "run" ~doc in
   Cmd.v info Term.(const run $ backend $ path)
 ;;
 
 let format_cmd =
   let open Cmdliner in
   let doc = "Format Calyx source code" in
-  let info = Cmd.info "FMT" ~doc in
+  let info = Cmd.info "fmt" ~doc in
   Cmd.v info Term.(const format $ path)
 ;;
 
@@ -129,14 +129,14 @@ let step_cmd =
     "Interactively step through the compiler's stages with a TUI. Allows for \
      fine-grained inspection, filtering, searching, and rewriting of terms"
   in
-  let info = Cmd.info "STEP" ~doc in
+  let info = Cmd.info "step" ~doc in
   Cmd.v info Term.(const step $ backend $ path)
 ;;
 
 let _lsp_command =
   let open Cmdliner in
   let doc = "Start LSP server" in
-  let _info = Cmd.info "LSP" ~doc in
+  let _info = Cmd.info "lsp" ~doc in
   (* TODO: make it work !! *)
   ()
 ;;

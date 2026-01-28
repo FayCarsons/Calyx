@@ -1,6 +1,6 @@
 module Lsp = Linol_lsp
 
-type t
+type t = { by_position : Calyx.Term.value IntervalTree.Positions.t }
 
 (* This is the hard part, what does our state look like? 
    How do we gather the info we need from the 'trace' effect?

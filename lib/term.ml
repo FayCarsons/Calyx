@@ -129,6 +129,12 @@ and record_tail =
   | TailClosed
 [@@deriving show, sexp]
 
+let empty_pos : Pos.t -> [ `Pos of Pos.t * unit ] = fun pos -> `Pos (pos, ())
+
+let map_pos : f:('a -> 'b) -> [ `Pos of Pos.t * 'a ] -> [ `Pos of Pos.t * 'b ] =
+  fun ~f (`Pos (pos, inner)) -> `Pos (pos, f inner)
+;;
+
 type 'a sum_type =
   { ident : Ident.t
   ; params : 'a Ident.Map.t

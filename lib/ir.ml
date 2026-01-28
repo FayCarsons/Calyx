@@ -269,7 +269,7 @@ let rec convert_expr : Term.t -> t = function
         (* Skip type-level arguments (implicit type params) *)
         if is_type_arg x' then go acc f' else go (convert_expr x' :: acc) f'
       | `Var ident -> App (ident, acc)
-      | `Ann (x, _) -> go acc x
+      | `Ann (x, _) | `Pos (_, x) -> go acc x
       | other ->
         failwith
         @@ Printf.sprintf "Illegal term in function position '%s'" (Term.show other)
@@ -364,7 +364,7 @@ and convert_type : Term.t -> ty = function
     let fields : ty Ident.Map.t = Map.map ~f:convert_type @@ go fields tail in
     TRecord fields
   | `Meta _ -> Skolem
-  | `Ann (x, _) -> convert_type x
+  | `Ann (x, _) | `Pos (_, x) -> convert_type x
   | `Type -> TVar (Ident.Intern.intern "Type") (* Kind of types *)
   | `SumType { ident; _ } -> TVar ident (* Sum types become type variables in IR *)
   | other ->

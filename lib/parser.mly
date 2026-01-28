@@ -92,7 +92,7 @@ let type_param :=
   | LPAREN; x = IDENT; COLON; ty = type_expr; RPAREN; { (x, ty) }
 
 let constructor :=
-  | PIPE; name = IDENT; tys = type_atom*; { Constructors.add name; (name, tys) }
+  | PIPE; name = IDENT; tys = loc(type_atom)*; { Constructors.add name; (name, tys) }
 
 let params :=
   | ps = param+; { List.concat ps }
@@ -101,9 +101,10 @@ let params :=
 let param :=
   | LPAREN; bs = binders; RPAREN; { List.map (fun (x, ty) -> Explicit, x, ty) bs }
   | LBRACE; bs = binders; RBRACE; { List.map (fun (x, ty) -> Implicit, x, ty) bs }
+  | LBRACKET; bs = binders; RBRACKET; { List.map (fun (x, ty) -> Instance, x, ty) bs }
 
 let binders :=
-  | x = IDENT; COLON; ty = type_expr; { [(x, ty)] }
+  | x = IDENT; COLON; ty = loc(type_expr); { [(x, ty)] }
   | x = IDENT; COMMA; rest = binders; { (x, snd (List.hd rest)) :: rest }
   | x = IDENT; { [(x, `Type)] }
 
@@ -158,8 +159,8 @@ let expr :=
   | expr_ann
 
 let expr_let :=
-  | LET; x = IDENT; ty = option(preceded(COLON, type_expr)); 
-    EQUALS; v = expr; IN; body = expr; {
+  | LET; x = IDENT; ty = option(COLON; loc(type_expr)); 
+    EQUALS; v = loc(expr); IN; body = loc(expr); {
       `Let (x, ty, v, body)
     }
 

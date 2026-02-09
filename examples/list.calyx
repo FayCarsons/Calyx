@@ -1,0 +1,29 @@
+data List (a : Type) where 
+| Nil 
+| Cons a (List a)
+
+def singleton {a} (x : a) -> List a do
+  Cons x Nil
+
+def map {a, b} (xs : List a) (f : a -> b) -> List b do 
+  match xs with
+  | Nil -> Nil
+  | Cons x xs -> Cons (f x) (map xs f)
+
+def concat {a} (xs : List a) (ys : List a) -> List a do
+  match xs with
+  | Nil -> ys
+  | Cons x xs -> Cons x (concat xs ys)
+
+def bind {a, b} (xs : List a) (f : a -> List b) -> List b do 
+  match xs with
+  | Nil -> Nil
+  | Cons x xs -> concat (f x) (bind xs f)
+
+def length {a} (xs : List a) -> Int do
+  match xs with
+  | Nil -> 0
+  | Cons x xs -> 1 + length xs
+
+def main () -> Int do
+  length (singleton 420)

@@ -407,23 +407,16 @@ let rec infer : Term.t -> (Term.value * Term.t) Context.t =
     let* vt = eval a in
     let* e = check e vt in
     Context.pure (vt, `Ann (e, a))
-  | `Type ->
-    (* print_endline "infer.Type"; *)
-    Context.pure (`Type, `Type)
-  | `Proj (term, field) ->
-    (* print_endline "infer.Proj"; *)
-    infer_proj term field
-  | `Pos (p, term) ->
-    (* print_endline "infer.Pos"; *)
-    Context.local ~f:(Context.with_pos p) (infer term)
+  | `Type -> Context.pure (`Type, `Type)
+  | `Proj (term, field) -> infer_proj term field
+  | `Pos (p, term) -> Context.local ~f:(Context.with_pos p) (infer term)
   | `Match (scrut, arms) ->
-    (* print_endline "infer.Match"; *)
     let* scrut_ty, scrut = infer scrut in
     let infer_arm (pat, body) =
       let* val_pat = pattern pat in
       let* bindings = pattern_bindings val_pat scrut_ty in
       let* level = Context.level in
-      (* Introduce pattern bindings into environment *)
+      (* Introduce pattern bindings into arm's environment *)
       Context.local
         ~f:(fun ctx ->
           List.fold_right bindings ~init:ctx ~f:(fun (ident, typ) ctx ->

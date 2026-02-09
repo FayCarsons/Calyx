@@ -21,7 +21,7 @@ module String = struct
     @@ QCheck.Test.make
          ~count:1000
          ~name:"Strings not inserted are not members"
-         QCheck.(list_of_size (Gen.int_range 16 512) string)
+         QCheck.(list_size (Gen.int_range 16 512) string)
          (fun strings ->
             let filter = create ~size:4096 ~numHashes:3 in
             List.for_all (Fun.compose not (member filter)) strings)
@@ -32,7 +32,7 @@ module String = struct
     @@ QCheck.Test.make
          ~count:1000
          ~name:"inserted strings are found"
-         QCheck.(list_of_size (Gen.int_range 16 512) string)
+         QCheck.(list_size (Gen.int_range 16 512) string)
          (fun strings ->
             let filter = create ~size:8192 ~numHashes:3 in
             List.iter (add filter) strings;
@@ -57,7 +57,7 @@ module Ident = struct
     @@ QCheck.Test.make
          ~count:1000
          ~name:"inserted ints are found"
-         QCheck.(list_of_size (Gen.int_range 16 512) int64)
+         QCheck.(list_size (Gen.int_range 16 512) int64)
          (fun ints ->
             let filter = create ~size:8192 ~numHashes:3 in
             List.iter (add filter) ints;
@@ -69,7 +69,7 @@ module Ident = struct
     @@ QCheck.Test.make
          ~count:1000
          ~name:"Ints not inserted are not members"
-         QCheck.(list_of_size (Gen.int_range 16 512) int64)
+         QCheck.(list_size (Gen.int_range 16 512) int64)
          (fun ints ->
             let filter = create ~size:4096 ~numHashes:3 in
             List.for_all (Fun.compose not (member filter)) ints)

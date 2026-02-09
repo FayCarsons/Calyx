@@ -94,7 +94,7 @@ let%test_unit "property: deps always precede dependents" =
   @@ QCheck.Test.make
        ~count:100
        ~name:"all dependencies appear before their dependents"
-       QCheck.(list_of_size (Gen.int_range 2 32) (string_of_size (Gen.int_range 1 64)))
+       QCheck.(list_size (Gen.int_range 2 32) (string_size (Gen.int_range 1 64)))
        (fun names ->
           let names = List.dedup_and_sort names ~compare:String.compare in
           let idents = List.map names ~f:Ident.Intern.intern in

@@ -1,0 +1,35 @@
+mod Concat a where
+  concat : a -> a -> a
+
+mod Map (t : Type -> Type) where 
+  map : t a -> (a -> b) -> t b
+
+data List a where 
+| Cons a (List a)
+| Nil
+
+instance Concat List where 
+  concat = \a b ->
+    match a with
+    | Cons x xs -> Cons x (concat xs b)
+    | Nil -> b
+
+mod Map List where
+  map = \xs f -> 
+    match xs with 
+    | Cons x xs -> Cons (f x) (map xs f)
+    | Nil -> Nil
+
+def concatMap {t a b} [Concat t, Map t a] (xs : t a) (f : a -> t b) -> t b do 
+  let xxs : t (t b) = map f xs in
+  concat xxs
+
+def length {a} (xs : List a) -> Nat do
+  match xs with
+  | Cons _ xs -> Inc (length xs)
+  | Nil -> Zero
+
+def main () -> Int do 
+  let xs = [Zero, Zero, Zero] in
+  let f = \n -> [n, n] in
+  length (concatMap xs f)

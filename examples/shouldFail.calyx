@@ -1,0 +1,5 @@
+def main () -> Bool do 
+  let id = \x -> x in 
+  let foo = id True in 
+  let bar = id 0 in
+  False

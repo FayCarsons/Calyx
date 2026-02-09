@@ -160,7 +160,7 @@ let%test_unit "intern/lookup roundtrip" =
   @@ QCheck.Test.make
        ~count:100
        ~name:"intern then lookup returns original"
-       QCheck.(string_of_size (Gen.int_range 1 50))
+       QCheck.(string_size (Gen.int_range 1 50))
        (fun s ->
           let id = Intern.intern s in
           String.equal (Intern.lookup id) s)
@@ -171,7 +171,7 @@ let%test_unit "interning same string is idempotent" =
   @@ QCheck.Test.make
        ~count:100
        ~name:"interning same string twice returns same id"
-       QCheck.(string_of_size (Gen.int_range 1 50))
+       QCheck.(string_size (Gen.int_range 1 50))
        (fun s ->
           let id1 = Intern.intern s in
           let id2 = Intern.intern s in
@@ -184,7 +184,7 @@ let%test_unit "different strings get different ids" =
        ~count:100
        ~name:"different strings get different ids"
        QCheck.(
-         pair (string_of_size (Gen.int_range 1 20)) (string_of_size (Gen.int_range 1 20)))
+         pair (string_size (Gen.int_range 1 20)) (string_size (Gen.int_range 1 20)))
        (fun (s1, s2) ->
           if String.equal s1 s2
           then true

@@ -328,7 +328,7 @@ let render_context_for_node state line =
       let max_name_len =
         List.fold ctx ~init:0 ~f:(fun acc (name, _, _) -> max acc (String.length name))
       in
-      List.mapi ctx ~f:(fun i (name, value, typ_opt) ->
+      List.concat_mapi ctx ~f:(fun i (name, value, typ_opt) ->
         let padded_name = String.pad_right name ~len:max_name_len in
         let typ_s =
           match typ_opt with
@@ -337,12 +337,46 @@ let render_context_for_node state line =
         in
         let value_s = Sexp.to_string_hum (Term.sexp_of_value value) in
         let label = if i = 0 then "ctx: " else "     " in
-        I.hcat
-          [ I.string A.(fg (gray 10)) (indent ^ label)
-          ; I.string name_attr padded_name
-          ; I.string type_attr (" : " ^ typ_s)
-          ; I.string value_attr (" = " ^ value_s)
-          ])))
+        (* Indentation for type continuation lines (after "name : ") *)
+        let type_cont_indent =
+          String.make (String.length indent + 5 + max_name_len + 3) ' '
+        in
+        (* Indentation for value continuation lines (after "= ") *)
+        let value_cont_indent =
+          String.make (String.length indent + 5 + max_name_len + 1) ' '
+        in
+        let typ_lines = String.split_lines typ_s in
+        let value_lines = String.split_lines value_s in
+        let header =
+          I.hcat
+            [ I.string A.(fg (gray 10)) (indent ^ label)
+            ; I.string name_attr padded_name
+            ; I.string type_attr " : "
+            ]
+        in
+        let typ_first, typ_rest =
+          match typ_lines with
+          | [] -> "", []
+          | first :: rest -> first, rest
+        in
+        let val_first, val_rest =
+          match value_lines with
+          | [] -> "()", []
+          | first :: rest -> first, rest
+        in
+        let first_line = I.hcat [ header; I.string type_attr typ_first ] in
+        let typ_rest_lines =
+          List.map typ_rest ~f:(fun l -> I.string type_attr (type_cont_indent ^ l))
+        in
+        let eq_line =
+          I.hcat
+            [ I.string A.empty value_cont_indent; I.string value_attr ("= " ^ val_first) ]
+        in
+        let val_rest_lines =
+          List.map val_rest ~f:(fun l ->
+            I.string value_attr (value_cont_indent ^ "  " ^ l))
+        in
+        [ first_line ] @ typ_rest_lines @ [ eq_line ] @ val_rest_lines)))
 ;;
 
 let node_render_height state line =
@@ -631,7 +665,9 @@ module Action = struct
     | Right -> move_cursor_right state
     | ToggleExpand -> toggle_expand state
     | ToggleFocus -> toggle_sexp state
-    | ToggleContext -> toggle_context state
+    | ToggleContext ->
+      prerr_endline "TOGGLE CONTEXT";
+      toggle_context state
     | JumpTop -> jump_to_top state
     | JumpBottom -> jump_to_bottom state
     | PageUp ->
@@ -678,6 +714,7 @@ let render_and_get_action () : Trace.step_action =
         (match Action.of_key event with
          | None -> loop ()
          | Some (Nav nav) ->
+           prerr_endline "INTERPRET ACTION";
            tui_state := Action.interpret !tui_state nav;
            loop ()
          | Some (Step StepInto) ->
@@ -776,7 +813,7 @@ let run ~source ~f =
     Stack.clear node_stack
   in
   let result =
-    Trace.handle_interactive ~on_enter ~on_leave ~on_start ~on_finish:(fun () -> ()) ~f
+    Trace.handle_interactive ~on_enter ~on_leave ~on_start ~on_finish:(Fun.const ()) ~f
   in
   (* Stay in inspection mode after tracing completes *)
   tui_state := { !tui_state with current_path = Path.empty };

@@ -273,7 +273,7 @@ let%test_unit "push/pop roundtrip (QCheck)" =
   @@ QCheck.Test.make
        ~count:100
        ~name:"push then pop returns elements in reverse"
-       QCheck.(list_of_size (Gen.int_range 1 100) int)
+       QCheck.(list_size (Gen.int_range 1 100) int)
        (fun xs ->
           let v = create () in
           List.iter (push v) xs;
@@ -286,7 +286,7 @@ let%test_unit "get after push (QCheck)" =
   @@ QCheck.Test.make
        ~count:100
        ~name:"'get' returns pushed elements at correct indices"
-       QCheck.(list_of_size (Gen.int_range 1 100) string)
+       QCheck.(list_size (Gen.int_range 1 100) string)
        (fun xs ->
           let v = create () in
           List.iter (push v) xs;

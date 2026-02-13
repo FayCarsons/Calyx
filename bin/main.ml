@@ -24,7 +24,8 @@ let build backend trace path =
   | Error es ->
     Printf.printf
       "Failed to compile:\n%s\n"
-      (String.concat ~sep:"\n" @@ List.map ~f:CalyxError.show es)
+      (String.concat ~sep:"\n" @@ List.map ~f:CalyxError.show es);
+    exit 1
 ;;
 
 let run backend trace path =
@@ -37,7 +38,8 @@ let run backend trace path =
   | Error es ->
     Printf.printf
       "Failed to compile:\n%s\n"
-      (String.concat ~sep:"\n" @@ List.map ~f:CalyxError.show es)
+      (String.concat ~sep:"\n" @@ List.map ~f:CalyxError.show es);
+    exit 1
 ;;
 
 let format path =
@@ -78,7 +80,8 @@ let step backend path =
   | Error es ->
     Printf.printf
       "Type checking failed:\n%s\n"
-      (String.concat ~sep:"\n" @@ List.map ~f:CalyxError.show es)
+      (String.concat ~sep:"\n" @@ List.map ~f:CalyxError.show es);
+    exit 1
   | exception Trace.Trace_aborted -> print_endline "Goodbye :3"
 ;;
 

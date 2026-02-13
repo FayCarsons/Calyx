@@ -10,20 +10,40 @@ failed=0
 
 echo ""
 echo -e "${BOLD}Running all examples...${RESET}"
-echo ""
 
-for file in examples/*.calyx; do
+# Should-succeed: these must compile successfully
+echo ""
+echo -e "${BOLD}Should succeed:${RESET}"
+for file in examples/should-succeed/*.calyx; do
   name=$(basename "$file" .calyx)
 
   if dune exec ./bin/main.exe -- build "$file" >/dev/null 2>&1; then
-    echo -e "  ${name} - ${GREEN}success${RESET}"
+    echo -e "  ${name} - ${GREEN}pass${RESET}"
     ((passed++))
   else
-    echo -e "  ${name} - ${RED}failure${RESET}"
+    echo -e "  ${name} - ${RED}FAIL (expected success)${RESET}"
     ((failed++))
+  fi
+done
+
+# Should-fail: these must fail to compile
+echo ""
+echo -e "${BOLD}Should fail:${RESET}"
+for file in examples/should-fail/*.calyx; do
+  name=$(basename "$file" .calyx)
+
+  if dune exec ./bin/main.exe -- build "$file" >/dev/null 2>&1; then
+    echo -e "  ${name} - ${RED}FAIL (expected failure)${RESET}"
+    ((failed++))
+  else
+    echo -e "  ${name} - ${GREEN}pass${RESET}"
+    ((passed++))
   fi
 done
 
 echo ""
 echo -e "${BOLD}Results:${RESET} ${GREEN}${passed} passed${RESET}, ${RED}${failed} failed${RESET}"
-echo ""
+
+if [ $failed -gt 0 ]; then
+  exit 1
+fi

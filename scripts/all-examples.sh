@@ -17,7 +17,7 @@ echo -e "${BOLD}Should succeed:${RESET}"
 for file in examples/should-succeed/*.calyx; do
   name=$(basename "$file" .calyx)
 
-  if dune exec ./bin/main.exe -- build "$file" >/dev/null 2>&1; then
+  if dune exec ./packages/bin/main.exe -- build "$file" >/dev/null 2>&1; then
     echo -e "  ${name} - ${GREEN}pass${RESET}"
     ((passed++))
   else
@@ -32,7 +32,7 @@ echo -e "${BOLD}Should fail:${RESET}"
 for file in examples/should-fail/*.calyx; do
   name=$(basename "$file" .calyx)
 
-  if dune exec ./bin/main.exe -- build "$file" >/dev/null 2>&1; then
+  if dune exec ./packages/bin/main.exe -- build "$file" >/dev/null 2>&1; then
     echo -e "  ${name} - ${RED}FAIL (expected failure)${RESET}"
     ((failed++))
   else

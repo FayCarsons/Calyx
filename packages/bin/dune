@@ -1,0 +1,14 @@
+(executable
+ (public_name calyx)
+ (package calyx)
+ (name main)
+ (libraries
+  core
+  calyx_core
+  calyx_typecheck
+  calyx_codegen
+  calyx_trace
+  calyx_viewer
+  calyx_runner
+  calyx_lsp
+  cmdliner))

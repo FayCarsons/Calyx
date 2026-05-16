@@ -1,0 +1,12 @@
+(library
+ (name calyx_trace)
+ (public_name calyx-trace)
+ (wrapped false)
+ (libraries core core_unix.time_float_unix calyx_core)
+ (preprocess
+  (pps
+   ppx_jane
+   ppx_deriving.show
+   ppx_deriving.eq
+   ppx_deriving.make
+   ppx_deriving.map)))

@@ -1,5 +1,0 @@
-(executable
- (public_name calyx)
- (package calyx)
- (name main)
- (libraries calyx calyxLsp cmdliner core))

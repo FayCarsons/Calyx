@@ -1,7 +1,7 @@
 open Core
 
 (* TODO: Currently IR primarily serves to flatten function declarations and applications, as well as do lambda lifting. 
-  But eventually we want to a CPS -> ANF transform
+  But eventually we want to an "ANF" IR a la [Compiling without Continuations](https://simon.peytonjones.org/assets/pdfs/compiling-without-continuations.pdf)
 *)
 module Fresh = struct
   type _ Effect.t += Get : string -> string Effect.t
@@ -281,8 +281,8 @@ let rec convert_expr : Term.t -> t = function
          | Some (_, arity) ->
            failwith
            @@ Printf.sprintf
-                "Partial application of constructor '%s' (%d of %d arguments) is not \
-                 yet supported"
+                "Partial application of constructor '%s' (%d of %d arguments) is not yet \
+                 supported"
                 (Ident.Intern.lookup ident)
                 (List.length acc)
                 arity
@@ -520,7 +520,8 @@ let%test_module "tag coherence" =
       | Infix (l, _, r) -> collect_expr (collect_expr acc l) r
 
     and collect_pat acc : pattern -> (int * Ident.t * int option) list = function
-      | PCtor (tag, name, ps) -> List.fold ps ~init:((tag, name, None) :: acc) ~f:collect_pat
+      | PCtor (tag, name, ps) ->
+        List.fold ps ~init:((tag, name, None) :: acc) ~f:collect_pat
       | PVar _ | PWild | PLit _ -> acc
     ;;
 
@@ -530,7 +531,9 @@ let%test_module "tag coherence" =
       | RecordType _ | SumType _ -> acc
     ;;
 
-    let%test_unit "checker tags = IR tags = declaration order; ctor arity = explicit fields" =
+    let%test_unit
+        "checker tags = IR tags = declaration order; ctor arity = explicit fields"
+      =
       QCheck.Test.check_exn
       @@ QCheck.Test.make ~count:150 ~name:"tag-coherence" Testgen.arb_adt_with_depth
       @@ fun (spec, depth) ->
@@ -574,9 +577,10 @@ let%test_module "tag coherence" =
             | None -> false
             | Some (i, fields) ->
               i = tag
-              && (match arity with
-                  | None -> true
-                  | Some n -> n = fields))
+              &&
+                (match arity with
+                | None -> true
+                | Some n -> n = fields))
         in
         (not (List.is_empty occurrences)) && store_coherent && occurrences_coherent
     ;;

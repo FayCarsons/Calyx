@@ -53,8 +53,7 @@ let rec occurs (m : Meta.t) (v : value) : bool =
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     occurs m (Context.lift_r (body var))
   | `RecordType { fields; tail } ->
-    List.exists (Map.data fields) ~f:(occurs m)
-    || Option.exists tail ~f:(occurs m)
+    List.exists (Map.data fields) ~f:(occurs m) || Option.exists tail ~f:(occurs m)
   | `Lit lit -> occurs_lit m lit
   | _ -> false
 
@@ -177,7 +176,7 @@ and unify_record_literals : value Ident.Map.t -> value Ident.Map.t -> unit =
     and b' = Map.to_alist b in
     (* FIXME: Instead of relying on 'unify' to emit an error, we should make
        this whole check fallible and, on failure, emit a more descriptive
-       "these" records don't match error *)
+       "these records don't match" error *)
     List.zip_exn a' b' |> List.iter ~f:(fun ((_, a), (_, b)) -> unify a b))
   else
     Context.fail
@@ -212,7 +211,9 @@ and unify_record_types : value row -> value row -> unit =
                )))
     | None, None -> (* Unreachable *) ()
   in
-  List.iter ~f:go @@ Set.to_list @@ Set.union (Map.key_set a.fields) (Map.key_set b.fields);
+  List.iter ~f:go
+  @@ Set.to_list
+  @@ Set.union (Map.key_set a.fields) (Map.key_set b.fields);
   match a.tail, b.tail with
   | None, None -> ()
   | Some a, Some b -> unify a b

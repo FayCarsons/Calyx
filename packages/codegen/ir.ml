@@ -221,7 +221,9 @@ module PrettyIR = struct
   ;;
 end
 
-module Context = struct
+(* Accumulator for declarations lifted out of expression position. Named
+   [Lifted] (not [Context]) so the type checker's [Context] stays visible. *)
+module Lifted = struct
   module M = struct
     type t = declaration
   end
@@ -430,7 +432,7 @@ and convert_lambda_to_function : ?name_prefix:string -> Term.t -> Term.t -> t =
       ; position = Pos.pos_empty, Pos.pos_empty
       }
   in
-  Context.tell func_decl;
+  Lifted.tell func_decl;
   Var function_name
 ;;
 
@@ -485,9 +487,98 @@ let convert : Term.t Term.declaration list -> declaration list =
       | _ -> acc)
   in
   let x, xs =
-    Context.handle (fun () ->
+    Lifted.handle (fun () ->
       Fresh.handle (fun () ->
         CtorTags.handle ctor_tags (fun () -> List.map ~f:go sorted_declarations)))
   in
   List.append x xs
+;;
+
+let%test_module "tag coherence" =
+  (module struct
+    (* Every constructor occurrence in the IR — construction sites [Ctor] and
+       match sites [PCtor] — must carry the tag given by the constructor's
+       position in its [SumType] declaration (the order the backend assigns
+       [_tag] values in), and construction sites must carry exactly the
+       explicit fields: implicit type arguments are erased. The checker's
+       definitions store must agree. This is the representation-coherence leg
+       of the zero-cost claim. *)
+
+    let rec collect_expr acc : t -> (int * Ident.t * int option) list = function
+      | Var _ -> acc
+      | Lit (Record fields) -> Map.data fields |> List.fold ~init:acc ~f:collect_expr
+      | Lit _ -> acc
+      | App (_, args) -> List.fold args ~init:acc ~f:collect_expr
+      | Ctor (tag, name, args) ->
+        List.fold args ~init:((tag, name, Some (List.length args)) :: acc) ~f:collect_expr
+      | Let (_, _, v, b) -> collect_expr (collect_expr acc v) b
+      | If (c, t, f) -> collect_expr (collect_expr (collect_expr acc c) t) f
+      | Match (s, arms) ->
+        List.fold arms ~init:(collect_expr acc s) ~f:(fun acc (p, e) ->
+          collect_expr (collect_pat acc p) e)
+      | Proj (t, _) -> collect_expr acc t
+      | Infix (l, _, r) -> collect_expr (collect_expr acc l) r
+
+    and collect_pat acc : pattern -> (int * Ident.t * int option) list = function
+      | PCtor (tag, name, ps) -> List.fold ps ~init:((tag, name, None) :: acc) ~f:collect_pat
+      | PVar _ | PWild | PLit _ -> acc
+    ;;
+
+    let collect_decl acc = function
+      | Function { body; _ } -> collect_expr acc body
+      | Constant { value; _ } -> collect_expr acc value
+      | RecordType _ | SumType _ -> acc
+    ;;
+
+    let%test_unit "checker tags = IR tags = declaration order; ctor arity = explicit fields" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:150 ~name:"tag-coherence" Testgen.arb_adt_with_depth
+      @@ fun (spec, depth) ->
+      let result, state =
+        Context.run ~bindings:Testgen.stdlib (fun () ->
+          let inferred = Checker.infer_toplevel (Testgen.program spec depth) in
+          let checker_tags =
+            List.init (Testgen.n_ctors spec) ~f:(fun i ->
+              let c = Testgen.ctor_name i in
+              c, (Option.value_exn (Context.lookup_ctor c)).Context.tag)
+          in
+          Solve.solve ();
+          List.map ~f:Zonk.zonk_toplevel inferred, checker_tags)
+      in
+      match result with
+      | Error _ -> false
+      | Ok (zonked, checker_tags) ->
+        List.is_empty state.Context.errors
+        &&
+        let ir = convert zonked in
+        let positions =
+          List.find_map ir ~f:(function
+            | SumType { constructors; _ } ->
+              Some
+                (List.mapi constructors ~f:(fun i (name, fields) ->
+                   name, (i, List.length fields)))
+            | _ -> None)
+          |> Option.value ~default:[]
+        in
+        let position name = List.Assoc.find positions name ~equal:Ident.equal in
+        let store_coherent =
+          List.for_all checker_tags ~f:(fun (c, tag) ->
+            match position c with
+            | Some (i, _) -> i = tag
+            | None -> false)
+        in
+        let occurrences = List.fold ir ~init:[] ~f:collect_decl in
+        let occurrences_coherent =
+          List.for_all occurrences ~f:(fun (tag, name, arity) ->
+            match position name with
+            | None -> false
+            | Some (i, fields) ->
+              i = tag
+              && (match arity with
+                  | None -> true
+                  | Some n -> n = fields))
+        in
+        (not (List.is_empty occurrences)) && store_coherent && occurrences_coherent
+    ;;
+  end)
 ;;

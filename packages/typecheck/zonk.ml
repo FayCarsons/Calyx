@@ -101,3 +101,30 @@ let zonk_toplevel : Term.t Term.declaration -> Term.t Term.declaration =
     Constant { ident; typ; body; position }
   | other -> other
 ;;
+
+let%test_module "zero-cost representation" =
+  (module struct
+    (* Encodings are conversion-only: after inference, solving and zonking, no
+       [`Self] node and no "$"-prefixed encoding binder may remain anywhere in
+       the elaborated program. This is what guarantees codegen only ever sees
+       nominal heads. *)
+    let%test_unit "zonked programs contain no encoding artifacts" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make
+           ~count:150
+           ~name:"no-encoding-leakage"
+           Testgen.arb_adt_with_depth
+      @@ fun (spec, depth) ->
+      let result, state =
+        Context.run ~bindings:Testgen.stdlib (fun () ->
+          let inferred = Checker.infer_toplevel (Testgen.program spec depth) in
+          Solve.solve ();
+          List.map ~f:zonk_toplevel inferred)
+      in
+      match result with
+      | Ok zonked ->
+        List.is_empty state.Context.errors && List.for_all zonked ~f:Testgen.decl_clean
+      | Error _ -> false
+    ;;
+  end)
+;;

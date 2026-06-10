@@ -46,3 +46,35 @@ let check ({ ident; constructors; _ } : Term.t Term.sum_type)
   | Some err -> Error err
   | None -> Ok ()
 ;;
+
+let%test_module "positivity" =
+  (module struct
+    let%test_unit "generated specifications are strictly positive" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:200 ~name:"positive-accepted" Testgen.arb_adt_spec
+      @@ fun spec -> Result.is_ok (check (Testgen.adt_of_spec spec))
+    ;;
+
+    let%test_unit "an injected negative occurrence is rejected" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:200 ~name:"negative-rejected" Testgen.arb_adt_with_index
+      @@ fun (spec, i) ->
+      let adt = Testgen.adt_of_spec spec in
+      let negative_field : Term.t =
+        `Pi
+          { plicity = Term.Explicit
+          ; ident = Ident.Intern.underscore
+          ; dom = Testgen.applied_data spec
+          ; cod = `Var Testgen.int_name
+          }
+      in
+      let constructors =
+        Map.update adt.constructors (Testgen.ctor_name i) ~f:(fun fields ->
+          negative_field :: Option.value fields ~default:[])
+      in
+      (match check { adt with constructors } with
+       | Error (`Positivity _) -> true
+       | _ -> false)
+    ;;
+  end)
+;;

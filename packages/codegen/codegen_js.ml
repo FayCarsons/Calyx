@@ -362,3 +362,40 @@ module Javascript : Codegen.M = struct
     |> Fun.flip String.append "\n\nprint(main())"
   ;;
 end
+
+let%test_module "js emission invariants" =
+  (module struct
+    let compile_program decls =
+      let result, state =
+        Context.run ~bindings:Testgen.stdlib (fun () ->
+          let inferred = Checker.infer_toplevel decls in
+          Solve.solve ();
+          List.map ~f:Zonk.zonk_toplevel inferred)
+      in
+      match result with
+      | Ok zonked when List.is_empty state.Context.errors ->
+        Some (Javascript.compile (Ir.convert zonked))
+      | _ -> None
+    ;;
+
+    (* The emitted program is the tagged representation and nothing else: no
+       encoding binder (every "$"-prefixed name) survives to the backend, and
+       constructors/matches show up as [_tag] objects and tests. *)
+    let%test_unit "emitted js is tagged objects only, never encodings" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:100 ~name:"js-clean" Testgen.arb_adt_with_depth
+      @@ fun (spec, depth) ->
+      match compile_program (Testgen.program spec depth) with
+      | None -> false
+      | Some js ->
+        (not (String.contains js '$')) && String.is_substring js ~substring:"_tag"
+    ;;
+
+    let%test "constructor matches compile to tag tests" =
+      let spec = Testgen.{ n_params = 0; ctor_fields = [ []; [ FRec ] ] } in
+      match compile_program (Testgen.program spec 2) with
+      | None -> false
+      | Some js -> String.is_substring js ~substring:"._tag ==="
+    ;;
+  end)
+;;

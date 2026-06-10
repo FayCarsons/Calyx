@@ -593,6 +593,13 @@ and check : Term.t -> Term.value -> Term.t =
     term'
 ;;
 
+(* Re-check each generated constructor encoding against its nominal Pi type
+   (a live test of the Self-intro rule). Settable by tests; enable on the CLI
+   with CALYX_VALIDATE_ENCODINGS=1. *)
+let validate_encodings : bool ref =
+  ref (Option.is_some (Sys.getenv "CALYX_VALIDATE_ENCODINGS"))
+;;
+
 (* Elaborate a [data] declaration per design/type_system.md §3: the type and
    each constructor become nominal constants (bound to their own neutrals, so
    conversion treats them as sealed heads), each backed by a self-typed Scott
@@ -715,7 +722,7 @@ let elaborate_sum_decl (decl : Term.t Term.sum_type) (k : unit -> 'a) : 'a =
          Context.define data_name (Context.Data data_info);
          List.iter ctor_infos ~f:(fun info ->
            Context.define info.Context.ctor_name (Context.Ctor info));
-         if Option.is_some (Sys.getenv "CALYX_VALIDATE_ENCODINGS")
+         if !validate_encodings
          then
            List.iteri ctor_types ~f:(fun tag (_, fields, ctor_type) ->
              let (_ : Term.t) = check (ctor_encoding_syntax tag fields) ctor_type in
@@ -768,4 +775,195 @@ let%test "self type round-trips through eval and quote" =
   | Ok (`Self (x', `App (`Var p', `Var x''))) ->
     Ident.equal x x' && Ident.equal p p' && Ident.equal x x''
   | _ -> false
+;;
+
+let%test_module "datatype invariants" =
+  (module struct
+    (* Infer and solve a whole program against the test stdlib. *)
+    let check_program decls =
+      Context.run ~bindings:Testgen.stdlib (fun () ->
+        let inferred = infer_toplevel decls in
+        Solve.solve ();
+        inferred)
+    ;;
+
+    let clean_run = function
+      | Ok _, state -> List.is_empty state.Context.errors
+      | Error _, _ -> false
+    ;;
+
+    (* Elaborate one generated declaration and probe the context. *)
+    let with_adt spec ~f =
+      let adt = Testgen.adt_of_spec spec in
+      Context.run ~bindings:Testgen.stdlib (fun () -> elaborate_sum_decl adt f)
+      |> function
+      | Ok b, state -> b && List.is_empty state.Context.errors
+      | Error _, _ -> false
+    ;;
+
+    let%test_unit "every generated encoding checks against its constructor type" =
+      let saved = !validate_encodings in
+      validate_encodings := true;
+      Exn.protect
+        ~finally:(fun () -> validate_encodings := saved)
+        ~f:(fun () ->
+          QCheck.Test.check_exn
+          @@ QCheck.Test.make ~count:150 ~name:"encoding-validation" Testgen.arb_adt_spec
+          @@ fun spec -> clean_run (check_program [ SumDecl (Testgen.adt_of_spec spec) ]))
+    ;;
+
+    (* The zero-cost core: applying an unfolded constructor application to a
+       motive and per-constructor continuations must select exactly the
+       continuation at the constructor's tag, passing the fields in order.
+       This is the agreement between tagged dispatch and encoding application
+       that the backend's [{_tag}] representation relies on. *)
+    let%test_unit "scott encoding application implements tagged dispatch" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:200 ~name:"tag-dispatch" Testgen.arb_adt_with_index
+      @@ fun (spec, pick) ->
+      with_adt spec ~f:(fun () ->
+        let c = Testgen.ctor_name pick in
+        let info = Option.value_exn (Context.lookup_ctor c) in
+        let data = Option.value_exn (Context.lookup_data Testgen.data_name) in
+        let int_v : Term.value = `Neutral (NVar (0, Testgen.int_name)) in
+        let args =
+          List.init info.Context.arity ~f:(fun i ->
+            (`Neutral (NVar (0, Intern.intern (Printf.sprintf "DISPATCH_ARG%d" i)))
+             : Term.value))
+        in
+        let spine =
+          List.fold
+            (List.init spec.Testgen.n_params ~f:(Fn.const int_v) @ args)
+            ~init:(NVar (0, c))
+            ~f:(fun acc v -> NApp (acc, v))
+        in
+        let unfolded = Option.value_exn (Solve.unfold spine) in
+        let motive : Term.value = `Neutral (NVar (0, Intern.intern "DISPATCH_MOTIVE")) in
+        let cont j : Term.value =
+          `Neutral (NVar (0, Intern.intern (Printf.sprintf "DISPATCH_CONT%d" j)))
+        in
+        let conts = List.init (List.length data.Context.ctors) ~f:cont in
+        let result = List.fold conts ~init:(Solve.vapp unfolded motive) ~f:Solve.vapp in
+        let expected = List.fold args ~init:(cont info.Context.tag) ~f:Solve.vapp in
+        Testgen.term_eq (quote 0 result) (quote 0 expected))
+    ;;
+
+    let%test_unit "encodings are stable under quote-eval round-trips" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:100 ~name:"encoding-round-trip" Testgen.arb_adt_spec
+      @@ fun spec ->
+      with_adt spec ~f:(fun () ->
+        let round v =
+          let q = quote 0 v in
+          Testgen.term_eq q (quote 0 (eval q))
+        in
+        let data = Option.value_exn (Context.lookup_data Testgen.data_name) in
+        round data.Context.encoding
+        && List.for_all data.Context.ctors ~f:(fun ci -> round ci.Context.encoding))
+    ;;
+
+    let%test_unit "matches missing constructors are flagged non-exhaustive" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:150 ~name:"match-coverage" Testgen.arb_adt_with_subset
+      @@ fun (spec, mask) ->
+      let n = Testgen.n_ctors spec in
+      let all = List.init n ~f:Fn.id in
+      let idxs = List.filter all ~f:(fun i -> mask land (1 lsl i) <> 0) in
+      let expected_missing =
+        List.filter all ~f:(fun i -> mask land (1 lsl i) = 0)
+        |> List.map ~f:Testgen.ctor_name
+      in
+      let decl = Term.SumDecl (Testgen.adt_of_spec spec) in
+      let names l =
+        List.map l ~f:Intern.lookup |> List.sort ~compare:String.compare
+      in
+      let flagged =
+        match check_program [ decl; Testgen.match_fn spec idxs ] with
+        | Ok _, state ->
+          (match state.Context.errors with
+           | [ `NonExhaustiveMatch missing ] ->
+             List.equal String.equal (names missing) (names expected_missing)
+           | _ -> false)
+        | Error _, _ -> false
+      in
+      let repaired =
+        clean_run (check_program [ decl; Testgen.match_fn ~catch_all:true spec idxs ])
+      in
+      let total = clean_run (check_program [ decl; Testgen.consume_fn spec ]) in
+      flagged && repaired && total
+    ;;
+
+    let%test "nat-shaped data encoding has the documented self/motive structure" =
+      let spec = Testgen.{ n_params = 0; ctor_fields = [ []; [ FRec ] ] } in
+      with_adt spec ~f:(fun () ->
+        let data = Option.value_exn (Context.lookup_data Testgen.data_name) in
+        match quote 0 data.Context.encoding with
+        | `Self
+            ( self_id
+            , `Pi
+                { plicity = Implicit
+                ; ident = motive
+                ; dom = `Pi { dom = `Var d; cod = `Type; _ }
+                ; cod
+                ; _
+                } ) ->
+          let rec walk n : Term.t -> bool = function
+            | `Pi { plicity = Explicit; cod; _ } -> walk (n + 1) cod
+            | `App (`Var p, `Var s) ->
+              n = 2 && Ident.equal p motive && Ident.equal s self_id
+            | _ -> false
+          in
+          Ident.equal d Testgen.data_name && walk 0 cod
+        | _ -> false)
+    ;;
+
+    let%test "structurally identical datatypes stay nominally distinct" =
+      let adt name ctor : Term.t Term.sum_type =
+        { ident = Intern.intern name
+        ; params = []
+        ; constructors =
+            Ident.Map.of_alist_exn [ Intern.intern ctor, [ (`Var Testgen.int_name : Term.t) ] ]
+        ; position = Testgen.no_pos
+        }
+      in
+      let coerce : Term.t Term.declaration =
+        let x = Intern.intern "x" in
+        Function
+          { ident = Intern.intern "coerce"
+          ; typ =
+              `Pi
+                { plicity = Explicit
+                ; ident = x
+                ; dom = `Var (Intern.intern "SealA")
+                ; cod = `Var (Intern.intern "SealB")
+                }
+          ; body = `Lam (Explicit, x, `Var x)
+          ; position = Testgen.no_pos
+          }
+      in
+      let program =
+        [ Term.SumDecl (adt "SealA" "MkSealA")
+        ; Term.SumDecl (adt "SealB" "MkSealB")
+        ; coerce
+        ]
+      in
+      not (clean_run (check_program program))
+    ;;
+
+    let%test "datatype parameters keep source order" =
+      let source =
+        "data PairT (b : Type) (a : Type) where\n\
+         | MkPairT b a\n\n\
+         def firstT (p : PairT Bool Int) -> Bool do\n\
+        \  match p with\n\
+        \  | MkPairT x y -> x\n"
+      in
+      match Parse.run source with
+      | Error _ -> false
+      | Ok toplevels ->
+        let desugared = List.map toplevels ~f:Term.desugar_toplevel in
+        let resolved, _ = Resolve.resolve_program desugared in
+        clean_run (check_program resolved)
+    ;;
+  end)
 ;;

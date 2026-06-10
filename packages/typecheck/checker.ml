@@ -27,6 +27,11 @@ let rec eval : Term.t -> Term.value =
       Context.close ~f:(fun value -> Context.with_binding x ~value (fun () -> eval body))
     in
     `Lam (plicity, x, body)
+  | `Self (x, body) ->
+    let body =
+      Context.close ~f:(fun value -> Context.with_binding x ~value (fun () -> eval body))
+    in
+    `Self (x, body)
   | `App (f, x) ->
     let f = eval f in
     let x = eval x in
@@ -61,10 +66,6 @@ let rec eval : Term.t -> Term.value =
     let fields = Map.map ~f:eval fields in
     let tail = Option.map ~f:eval tail in
     (`RecordType { fields; tail } : Term.value)
-  | `SumType { ident; params; constructors; position } ->
-    let params = Map.map ~f:eval params in
-    let constructors = Map.map ~f:(List.map ~f:eval) constructors in
-    `SumType { ident; params; constructors; position }
   | `Proj (term, field) -> proj field (eval term)
 
 and app : value -> value -> value =
@@ -72,22 +73,6 @@ and app : value -> value -> value =
   match f with
   | `Lam (_, _, body) -> Context.lift_r (body x : (value, Calyx_error.t) result)
   | `Neutral n -> `Neutral (NApp (n, x))
-  | `SumType { ident; params; constructors; position } ->
-    (* Apply a sum type to a type argument
-       For example, Option (a : Type) becomes Type -> Option
-       This is probably not how we want to do this in the longterm but it works right now
-    *)
-    (match Map.to_alist ~key_order:`Increasing params with
-     | [] -> assert false
-     | (param, _) :: params ->
-       let subst_value v =
-         match v with
-         | `Neutral (NVar (_, name)) when Ident.equal name param -> x
-         | other -> other
-       in
-       let constructors = Map.map constructors ~f:(List.map ~f:subst_value) in
-       let params = Ident.Map.of_alist_exn params in
-       `SumType { ident; params; constructors; position })
   | other ->
     Context.fail @@ `Expected ("Function", Sexp.to_string_hum @@ Term.sexp_of_value other)
 
@@ -110,16 +95,6 @@ and pattern : Term.t Term.pattern -> Term.value Term.pattern = function
      | Bool b -> PLit (Bool b))
   | PRec fields -> PRec (List.map fields ~f:(fun (ident, pat) -> ident, pattern pat))
 
-(* Resolve a type to a SumType, looking up neutral variables in the environment *)
-and resolve_sum_type : Term.value -> Term.value Term.sum_type option = function
-  | `SumType s -> Some s
-  | `Neutral (NVar (_, name)) ->
-    (* Look up the name in the environment to find the actual SumType *)
-    (match Context.lookup_value name with
-     | Some (`SumType s) -> Some s
-     | _ -> None)
-  | _ -> None
-
 (* Extract bindings from a pattern given the scrutinee type *)
 and pattern_bindings
   : Term.value Term.pattern -> Term.value -> (Ident.t * Term.value) list
@@ -131,15 +106,7 @@ and pattern_bindings
   (* TODO: Record pattern bindings (also appear inside of [literal]) *)
   | PLit _ -> []
   | PRec _ -> []
-  | PCtor (ctor_name, args) ->
-    (* Extract constructor argument types from the scrutinee's sum type *)
-    (match resolve_sum_type scrut_ty with
-     | Some { constructors; _ } ->
-       (* If this isn't found in the [constructors] map then something has really gone wrong *)
-       Map.find_exn constructors ctor_name
-       |> List.zip_exn args
-       |> List.concat_map ~f:(Tuple2.uncurry pattern_bindings)
-     | None -> [])
+  | PCtor _ -> Context.fail (`Unsupported "constructor patterns")
 ;;
 
 let rec quote : int -> Term.value -> Term.t =
@@ -160,6 +127,10 @@ let rec quote : int -> Term.value -> Term.t =
     let var = `Neutral (NVar (0, x)) in
     let body = quote (succ lvl) (Context.lift_r (b var)) in
     `Lam (plicity, x, body)
+  | `Self (x, b) ->
+    let var = `Neutral (NVar (lvl, x)) in
+    let body = quote (succ lvl) (Context.lift_r (b var)) in
+    `Self (x, body)
   | `Lit lit ->
     (match lit with
      | Record fields -> `Lit (Record (Map.map ~f:(quote lvl) fields))
@@ -171,10 +142,6 @@ let rec quote : int -> Term.value -> Term.t =
     let fields = Map.map ~f:(quote lvl) fields in
     let tail = Option.map ~f:(quote lvl) tail in
     (`RecordType { fields; tail } : Term.t)
-  | `SumType { ident; params; constructors; position } ->
-    let params = Map.map ~f:(quote lvl) params in
-    let constructors = Map.map ~f:(List.map ~f:(quote lvl)) constructors in
-    `SumType { ident; params; constructors; position }
   | `Err e -> `Err e
   | `Opaque -> failwith "Cannot quote opaque values, they should not appear here"
   | `Infix { left; op; right } ->
@@ -245,6 +212,13 @@ let rec infer : Term.t -> Term.value * Term.t =
       Context.with_var ident ~typ:dom_val ~f:(fun _var -> check cod `Type)
     in
     `Type, `Pi { plicity; ident; dom; cod }
+  | `Self (x, body) ->
+    (* Formation: Γ, x : ($x. T) ⊢ T : Type  ⟹  Γ ⊢ $x. T : Type *)
+    let self_ty = eval (`Self (x, body)) in
+    let (_ : Term.t) =
+      Context.with_var x ~typ:self_ty ~f:(fun _var -> check body `Type)
+    in
+    `Type, `Self (x, body)
   | `Lam (plicity, x, body) ->
     let meta = Context.fresh_meta () in
     let dom = `Neutral (NMeta meta) in
@@ -265,7 +239,9 @@ let rec infer : Term.t -> Term.value * Term.t =
         insert_implicits cod new_f
       | `Pi (Explicit, _, dom, cod) ->
         let x' = check x dom in
-        let result_ty = Context.lift_r (cod (`Neutral (NVar (0, Intern.underscore)))) in
+        (* Dependent application: the result type is the codomain at the
+           actual argument, computed by NbE. *)
+        let result_ty = Context.lift_r (cod (eval x')) in
         let quoted_ty = quote 0 result_ty in
         result_ty, `Ann (`App (f, x'), quoted_ty)
       | `Neutral (NMeta _) as tf ->
@@ -318,33 +294,44 @@ let rec infer : Term.t -> Term.value * Term.t =
   | `Pos (p, term) -> Context.with_pos p (fun () -> infer term)
   | `Match (scrut, arms) ->
     let scrut_ty, scrut = infer scrut in
-    let infer_arm (pat, body) =
-      let val_pat = pattern pat in
-      let bindings = pattern_bindings val_pat scrut_ty in
-      let level = Context.level () in
-      (* Introduce pattern bindings into arm's environment *)
-      let entries =
-        List.map bindings ~f:(fun (ident, typ) ->
-          ident, Context.Typed (`Neutral (NVar (level, ident)), typ))
-      in
-      Context.with_bindings entries (fun () ->
-        let body_ty, body = infer body in
-        let body_ty' = quote 0 body_ty in
-        (pat, `Ann (body, body_ty')), body_ty)
+    let is_ctor_pat (pat, _) =
+      match pat with
+      | PCtor _ -> true
+      | _ -> false
     in
-    let arms_and_types = List.map ~f:infer_arm arms in
-    let annotated_arms = List.map ~f:fst arms_and_types in
-    let arm_types = List.map ~f:snd arms_and_types in
-    (match arm_types with
-     | [] ->
-       Context.fail (`Expected ("non-empty match", Term.show (`Match (scrut, arms))))
-     | first_ty :: rest_types ->
-       List.iter rest_types ~f:(fun ty ->
-         Context.tell_constraint (Constraint.equals first_ty ty));
-       let scrut_typ = quote 0 scrut_ty in
-       let first_typ = quote 0 first_ty in
-       ( first_ty
-       , (`Ann (`Match (`Ann (scrut, scrut_typ), annotated_arms), first_typ) : Term.t) ))
+    if List.exists arms ~f:is_ctor_pat
+    then infer_ctor_match scrut_ty scrut arms
+    else (
+      (* No constructor arms: var/wildcard/literal patterns only. This path
+         also covers desugared [if] (PVar True / PVar False arms), whose
+         output shape ir.ml re-fuses; arm patterns must stay untouched. *)
+      let infer_arm (pat, body) =
+        let val_pat = pattern pat in
+        let bindings = pattern_bindings val_pat scrut_ty in
+        let level = Context.level () in
+        (* Introduce pattern bindings into arm's environment *)
+        let entries =
+          List.map bindings ~f:(fun (ident, typ) ->
+            ident, Context.Typed (`Neutral (NVar (level, ident)), typ))
+        in
+        Context.with_bindings entries (fun () ->
+          let body_ty, body = infer body in
+          let body_ty' = quote 0 body_ty in
+          (pat, `Ann (body, body_ty')), body_ty)
+      in
+      let arms_and_types = List.map ~f:infer_arm arms in
+      let annotated_arms = List.map ~f:fst arms_and_types in
+      let arm_types = List.map ~f:snd arms_and_types in
+      match arm_types with
+      | [] ->
+        Context.fail (`Expected ("non-empty match", Term.show (`Match (scrut, arms))))
+      | first_ty :: rest_types ->
+        List.iter rest_types ~f:(fun ty ->
+          Context.tell_constraint (Constraint.equals first_ty ty));
+        let scrut_typ = quote 0 scrut_ty in
+        let first_typ = quote 0 first_ty in
+        ( first_ty
+        , (`Ann (`Match (`Ann (scrut, scrut_typ), annotated_arms), first_typ) : Term.t) ))
   | `Lit lit ->
     let ty, lit' = infer_lit lit in
     let ty' = quote 0 ty in
@@ -359,14 +346,6 @@ let rec infer : Term.t -> Term.value * Term.t =
     in
     let record_val' = quote 0 record_val in
     `Type, `Ann ((`RecordType { fields; tail } : Term.t), record_val')
-  | `SumType { ident; params; constructors; position } ->
-    (* Sum types have type Type *)
-    let sum_val =
-      let params = Map.map ~f:eval params in
-      let constructors = Map.map ~f:(List.map ~f:eval) constructors in
-      quote 0 @@ `SumType { ident; params; constructors; position }
-    in
-    `Type, `Ann (`SumType { ident; params; constructors; position }, sum_val)
 
 and infer_lit : Term.t Term.literal -> Term.value * Term.t Term.literal = function
   | Int n -> `Neutral (NVar (0, Intern.intern "Int")), Int n
@@ -409,6 +388,144 @@ and infer_proj : Term.t -> Ident.t -> Term.value * Term.t =
     field_type, `Proj (annotated, field)
   | other -> Context.fail (`Expected ("Record", Term.show_value other))
 
+(* Typing for matches with constructor arms, as the constant-motive
+   specialization of Scott elimination. For scrutinee [s : D v̄] and result
+   type [R], unfolding [D v̄] and instantiating at [s] with motive [λ_. R]
+   gives
+
+     s : (F̄_0[p̄ := v̄] -> R) -> ... -> (F̄_m[p̄ := v̄] -> R) -> R
+
+   so arm [C_i x̄ -> e_i] is well-typed iff [e_i : R] under
+   [x̄ : F̄_i[p̄ := v̄]] — computed by NbE-applying the constructor's Pi
+   closures to v̄, never by substitution. The elimination spine itself is not
+   reified: the Match node stays in the elaborated AST for the IR's
+   tag-dispatch path. *)
+and infer_ctor_match
+  : Term.value -> Term.t -> (Term.t Term.pattern * Term.t) list -> Term.value * Term.t
+  =
+  fun scrut_ty scrut arms ->
+  let data =
+    let first_ctor =
+      List.find_map arms ~f:(fun (pat, _) ->
+        match pat with
+        | PCtor (c, _) -> Some c
+        | _ -> None)
+    in
+    match first_ctor with
+    | None -> assert false (* caller guarantees at least one PCtor arm *)
+    | Some c ->
+      let info =
+        Context.lookup_ctor c |> Context.lift_o_or_fail ~error:(`UnknownConstructor c)
+      in
+      Context.lookup_data info.Context.datatype
+      |> Context.lift_o_or_fail ~error:(`UnknownConstructor c)
+  in
+  (* Datatype parameter instances: decompose a nominal scrutinee-type spine
+     directly, otherwise constrain fresh metas. *)
+  let param_args : Term.value list =
+    let forced = Solve.force scrut_ty in
+    let nominal_spine =
+      match forced with
+      | `Neutral n ->
+        (match Solve.spine n with
+         | Some (head, args) when Ident.equal head data.Context.data_name -> Some args
+         | _ -> None)
+      | _ -> None
+    in
+    match nominal_spine with
+    | Some args -> args
+    | None ->
+      let metas =
+        List.init data.Context.param_arity ~f:(fun _ ->
+          (`Neutral (NMeta (Context.fresh_meta ())) : Term.value))
+      in
+      let applied =
+        List.fold
+          metas
+          ~init:(NVar (0, data.Context.data_name))
+          ~f:(fun acc m -> NApp (acc, m))
+      in
+      Context.tell_constraint (Constraint.equals forced (`Neutral applied));
+      metas
+  in
+  let infer_arm (pat, body) =
+    let finish pat body =
+      let body_ty, body' = infer body in
+      (pat, (`Ann (body', quote 0 body_ty) : Term.t)), body_ty
+    in
+    match pat with
+    | PCtor (c, ps) ->
+      let info =
+        Context.lookup_ctor c |> Context.lift_o_or_fail ~error:(`UnknownConstructor c)
+      in
+      if not (Ident.equal info.Context.datatype data.Context.data_name)
+      then Context.fail (`ConstructorMismatch (c, data.Context.data_name));
+      if List.length ps <> info.Context.arity
+      then Context.fail (`CtorArity (c, info.Context.arity, List.length ps));
+      let rec instantiate ty = function
+        | [] -> ty
+        | v :: rest ->
+          (match Solve.force ty with
+           | `Pi (Implicit, _, _, cod) -> instantiate (Context.lift_r (cod v)) rest
+           | other ->
+             Context.fail
+               (`Expected
+                   ("constructor type with implicit parameters", Term.show_value other)))
+      in
+      let rec bind_fields ty = function
+        | [] -> finish pat body
+        | p :: rest ->
+          (match Solve.force ty with
+           | `Pi (Explicit, _, dom, cod) ->
+             let bind_ident =
+               match p with
+               | PVar x -> x
+               | PWild -> Intern.underscore
+               | _ -> Context.fail (`Unsupported "nested constructor patterns")
+             in
+             Context.with_var bind_ident ~typ:dom ~f:(fun var ->
+               bind_fields (Context.lift_r (cod var)) rest)
+           | other ->
+             Context.fail (`Expected ("constructor field type", Term.show_value other)))
+      in
+      bind_fields (instantiate info.Context.ctor_type param_args) ps
+    | PVar x -> Context.with_var x ~typ:scrut_ty ~f:(fun _ -> finish pat body)
+    | PWild -> finish pat body
+    | PLit _ | PRec _ ->
+      Context.fail (`Unsupported "literal or record patterns on datatype scrutinees")
+  in
+  let arms_and_types = List.map ~f:infer_arm arms in
+  let has_catch_all =
+    List.exists arms ~f:(fun (pat, _) ->
+      match pat with
+      | PVar _ | PWild -> true
+      | _ -> false)
+  in
+  if not has_catch_all
+  then (
+    let matched =
+      List.filter_map arms ~f:(fun (pat, _) ->
+        match pat with
+        | PCtor (c, _) -> Some c
+        | _ -> None)
+    in
+    let missing =
+      List.filter_map data.Context.ctors ~f:(fun ci ->
+        if List.mem matched ci.Context.ctor_name ~equal:Ident.equal
+        then None
+        else Some ci.Context.ctor_name)
+    in
+    if not (List.is_empty missing) then Context.tell_error (`NonExhaustiveMatch missing));
+  match arms_and_types with
+  | [] -> Context.fail (`Expected ("non-empty match", Term.show (`Match (scrut, arms))))
+  | (first_arm, first_ty) :: rest ->
+    List.iter rest ~f:(fun (_, ty) ->
+      Context.tell_constraint (Constraint.equals first_ty ty));
+    let annotated_arms = first_arm :: List.map ~f:fst rest in
+    let scrut_typ = quote 0 scrut_ty in
+    let first_typ = quote 0 first_ty in
+    first_ty, `Ann (`Match (`Ann (scrut, scrut_typ), annotated_arms), first_typ)
+
 and check : Term.t -> Term.value -> Term.t =
   fun term expected ->
   Context.trace (Trace.Check expected) term [%here]
@@ -435,6 +552,11 @@ and check : Term.t -> Term.value -> Term.t =
     let body' = Context.with_var x ~typ:dom ~f:(fun _ -> check body cod) in
     let expected = quote 0 expected in
     `Ann (`Lam (plicity, x, body'), expected)
+  | (`Lam _ as term), `Neutral n when Option.is_some (Solve.unfold n) ->
+    (* A lambda checked against a nominal datatype head: unfold one step so
+       the Self-intro rule below can fire. Only encoding validation hits
+       this; elaborated user code never checks lambdas against datatypes. *)
+    check term (Option.value_exn (Solve.unfold n))
   | `Let (ident, ty, value, body), expected ->
     let vty =
       match ty with
@@ -460,10 +582,145 @@ and check : Term.t -> Term.value -> Term.t =
     Context.tell_constraint (Constraint.equals typ' expected);
     let x = check expression typ' in
     `Ann (x, typ)
+  | term, `Self (_, closure) ->
+    (* Intro (SelfGen): Γ ⊢ t ⇐ T[x := t]  ⟹  Γ ⊢ t ⇐ $x. T.
+       The "substitution" is NbE application of the HOAS closure. *)
+    let term_val = eval term in
+    check term (Context.lift_r (closure term_val))
   | term, expected ->
     let inferred, term' = infer term in
     Context.tell_constraint (Constraint.equals inferred expected);
     term'
+;;
+
+(* Elaborate a [data] declaration per design/type_system.md §3: the type and
+   each constructor become nominal constants (bound to their own neutrals, so
+   conversion treats them as sealed heads), each backed by a self-typed Scott
+   encoding registered in the definitions store for delta unfolding.
+
+   Encodings are evaluated only after the type and all constructors are bound
+   to neutrals: every recursive reference inside an encoding is then a stuck
+   nominal neutral, so nothing diverges at eval or quote time. *)
+let elaborate_sum_decl (decl : Term.t Term.sum_type) (k : unit -> 'a) : 'a =
+  let ({ ident = data_name; params; constructors; _ } : Term.t Term.sum_type) = decl in
+  let pi ?(plicity = Explicit) ident dom cod : Term.t =
+    `Pi { plicity; ident; dom; cod }
+  in
+  let lam ?(plicity = Explicit) ident body : Term.t = `Lam (plicity, ident, body) in
+  let app_spine (f : Term.t) (xs : Term.t list) : Term.t =
+    List.fold xs ~init:f ~f:(fun acc x -> `App (acc, x))
+  in
+  let kind_syntax =
+    List.fold_right params ~init:(`Type : Term.t) ~f:(fun (p, ty) cod -> pi p ty cod)
+  in
+  let (_ : Term.t) = check kind_syntax `Type in
+  let kind = eval kind_syntax in
+  Context.with_binding
+    data_name
+    ~value:(`Neutral (NVar (0, data_name)))
+    ~typ:kind
+    (fun () ->
+       let applied_data =
+         app_spine (`Var data_name) (List.map params ~f:(fun (p, _) -> `Var p))
+       in
+       let ctor_alist = Map.to_alist ~key_order:`Increasing constructors in
+       let ctor_types =
+         List.map ctor_alist ~f:(fun (ctor, fields) ->
+           let ty_syntax =
+             List.fold_right fields ~init:applied_data ~f:(fun field cod ->
+               pi Intern.underscore field cod)
+             |> fun fields_pi ->
+             List.fold_right params ~init:fields_pi ~f:(fun (p, pty) cod ->
+               pi ~plicity:Implicit p pty cod)
+           in
+           let (_ : Term.t) = check ty_syntax `Type in
+           ctor, fields, eval ty_syntax)
+       in
+       let ctor_bindings =
+         List.map ctor_types ~f:(fun (ctor, _, ty) ->
+           ctor, Context.Typed (`Neutral (NVar (0, ctor)), ty))
+       in
+       Context.with_bindings ctor_bindings (fun () ->
+         (* "$"-prefixed binders cannot collide with user identifiers. *)
+         let self_id = Intern.intern "$self"
+         and motive_id = Intern.intern "$P" in
+         let field_ids fields =
+           List.mapi fields ~f:(fun i _ -> Intern.intern (Printf.sprintf "$x%d" i))
+         in
+         (* K_i = (x1 : F1) -> ... -> (xn : Fn) -> P (C_i p̄ x̄) *)
+         let branch (ctor, fields) =
+           let xs = field_ids fields in
+           let ctor_applied =
+             app_spine
+               (`Var ctor)
+               (List.map params ~f:(fun (p, _) -> `Var p)
+                @ List.map xs ~f:(fun x -> `Var x))
+           in
+           List.fold_right
+             (List.zip_exn xs fields)
+             ~init:(`App (`Var motive_id, ctor_applied))
+             ~f:(fun (x, field) cod -> pi x field cod)
+         in
+         (* D = λ p̄. $self. {P : D p̄ -> Type} -> K_0 -> ... -> K_m -> P self *)
+         let data_encoding_syntax =
+           let motive_ty = pi Intern.underscore applied_data `Type in
+           let body =
+             List.fold_right
+               ctor_alist
+               ~init:(`App (`Var motive_id, `Var self_id))
+               ~f:(fun ctor cod -> pi Intern.underscore (branch ctor) cod)
+           in
+           let self_body : Term.t =
+             `Self (self_id, pi ~plicity:Implicit motive_id motive_ty body)
+           in
+           List.fold_right params ~init:self_body ~f:(fun (p, _) acc -> lam p acc)
+         in
+         (* C_i = λ {p̄} x̄. λ {P} k_0 ... k_m. k_i x̄ *)
+         let cont_ids =
+           List.mapi ctor_alist ~f:(fun i _ -> Intern.intern (Printf.sprintf "$k%d" i))
+         in
+         let ctor_encoding_syntax tag fields =
+           let xs = field_ids fields in
+           let body =
+             app_spine
+               (`Var (List.nth_exn cont_ids tag))
+               (List.map xs ~f:(fun x -> `Var x))
+           in
+           List.fold_right cont_ids ~init:body ~f:(fun kid acc -> lam kid acc)
+           |> lam ~plicity:Implicit motive_id
+           |> fun acc ->
+           List.fold_right xs ~init:acc ~f:(fun x acc -> lam x acc)
+           |> fun acc ->
+           List.fold_right params ~init:acc ~f:(fun (p, _) acc ->
+             lam ~plicity:Implicit p acc)
+         in
+         let ctor_infos =
+           List.mapi ctor_types ~f:(fun tag (ctor, fields, ctor_type) ->
+             { Context.ctor_name = ctor
+             ; datatype = data_name
+             ; tag
+             ; arity = List.length fields
+             ; ctor_type
+             ; encoding = eval (ctor_encoding_syntax tag fields)
+             })
+         in
+         let data_info =
+           { Context.data_name
+           ; param_arity = List.length params
+           ; kind
+           ; ctors = ctor_infos
+           ; encoding = eval data_encoding_syntax
+           }
+         in
+         Context.define data_name (Context.Data data_info);
+         List.iter ctor_infos ~f:(fun info ->
+           Context.define info.Context.ctor_name (Context.Ctor info));
+         if Option.is_some (Sys.getenv "CALYX_VALIDATE_ENCODINGS")
+         then
+           List.iteri ctor_types ~f:(fun tag (_, fields, ctor_type) ->
+             let (_ : Term.t) = check (ctor_encoding_syntax tag fields) ctor_type in
+             ());
+         k ()))
 ;;
 
 let infer_toplevel : Term.t Term.declaration list -> Term.t Term.declaration list =
@@ -487,54 +744,28 @@ let infer_toplevel : Term.t Term.declaration list -> Term.t Term.declaration lis
       Context.with_binding ident ~typ ~value (fun () ->
         let typ = quote 0 typ in
         Constant { ident; typ; body; position } :: go rest)
-    | RecordDecl { ident; params = _; fields; position } :: rest ->
-      (* Evaluate field types and construct the record type *)
-      let field_types = Map.map fields ~f:eval in
-      let record_type : Term.value = `RecordType { fields = field_types; tail = None } in
-      (* Bind the record type name to the record type value *)
-      Context.with_binding ident ~value:record_type ~typ:`Type (fun () ->
-        RecordDecl { ident; params = Ident.Map.empty; fields; position } :: go rest)
-    (* Sum Types *)
-    | SumDecl { ident; params; constructors; position } :: rest ->
-      let eval_params = Map.map ~f:eval params in
-      (* Evaluate constructor arg types - recursive refs become Neutral(NVar(_, ident))
-         which pattern_bindings resolves via environment lookup *)
-      let eval_constructors = Map.map constructors ~f:(List.map ~f:eval) in
-      let sum_type =
-        `SumType
-          { ident; params = eval_params; constructors = eval_constructors; position }
-      in
-      (* Build constructor type - fields are ASTs, evaluated inside closures *)
-      let build_ctor_type (fields : Term.t list) : Term.value =
-        let rec build param_vars remaining_params =
-          match remaining_params with
-          | [] ->
-            let eval_fields = List.map fields ~f:eval in
-            let applied = List.fold param_vars ~init:sum_type ~f:app in
-            List.fold eval_fields ~init:applied ~f:(fun acc field ->
-              `Pi (Explicit, Ident.Intern.underscore, field, Fun.const (Ok acc)))
-          | (param_name, kind) :: rest_params ->
-            let cod =
-              Context.close ~f:(fun value ->
-                Context.with_binding param_name ~value ~typ:kind (fun () ->
-                  build (param_vars @ [ value ]) rest_params))
-            in
-            `Pi (Implicit, param_name, kind, cod)
-        in
-        build [] @@ Map.to_alist eval_params
-      in
-      (* Build constructor bindings with sum_type in scope for recursive references *)
-      let constructor_bindings =
-        Context.with_binding ident ~value:sum_type ~typ:`Type (fun () ->
-          Map.to_alist ~key_order:`Increasing constructors
-          |> List.map ~f:(fun (ctor, fields) ->
-            let ctor_pi = build_ctor_type fields in
-            ctor, Context.Typed (`Opaque, ctor_pi)))
-      in
-      let type_binding = ident, Context.Typed (sum_type, `Type) in
-      Context.with_bindings (type_binding :: constructor_bindings) (fun () ->
-        SumDecl { ident; params; constructors; position } :: go rest)
+    | SumDecl decl :: rest ->
+      (match Positivity.check decl with
+       | Error e ->
+         Context.tell_error e;
+         SumDecl decl :: go rest
+       | Ok () -> elaborate_sum_decl decl (fun () -> SumDecl decl :: go rest))
+    | (RecordDecl _ as decl) :: rest ->
+      Context.tell_error (`Unsupported "record type declarations");
+      decl :: go rest
     | [] -> []
   in
   go program
+;;
+
+let%test "self type round-trips through eval and quote" =
+  let x = Intern.intern "self" in
+  let p = Intern.intern "P" in
+  let tm : Term.t = `Self (x, `App (`Var p, `Var x)) in
+  Context.run (fun () -> quote 0 (eval tm))
+  |> fst
+  |> function
+  | Ok (`Self (x', `App (`Var p', `Var x''))) ->
+    Ident.equal x x' && Ident.equal p p' && Ident.equal x x''
+  | _ -> false
 ;;

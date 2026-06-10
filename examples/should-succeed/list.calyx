@@ -1,5 +1,5 @@
 data List (a : Type) where 
-| Nil 
+| Nil
 | Cons a (List a)
 
 def singleton {a} (x : a) -> List a do

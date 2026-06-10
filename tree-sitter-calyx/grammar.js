@@ -24,7 +24,7 @@ module.exports = grammar({
 
     constant_def: $ => seq(
       'const',
-      field('name', $.type_identifier),
+      field('name', choice($.type_identifier, $.identifier)),
       ':',
       field('type', $._type),
       '=',
@@ -232,6 +232,9 @@ module.exports = grammar({
     float: $ => /-?[0-9]+\.[0-9]*([eE][+-]?[0-9]+)?/,
     boolean: $ => choice('True', 'False'),
     operator: $ => /[+\-*/<>=!&|^%~?@$:]+/,
-    comment: $ => seq('--', /.*/),
+    comment: $ => token(choice(
+      seq('--', /[^\n\r]*/),
+      seq('{-', /[^-]*-+([^-}][^-]*-+)*/, '}'),
+    )),
   },
 });

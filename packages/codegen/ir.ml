@@ -83,13 +83,13 @@ type declaration =
       }
   | RecordType of
       { ident : Ident.t
-      ; params : ty Ident.Map.t
+      ; params : (Ident.t * ty) list
       ; fields : ty Ident.Map.t
       ; position : Pos.pos * Pos.pos
       }
   | SumType of
       { ident : Ident.t
-      ; params : ty Ident.Map.t
+      ; params : (Ident.t * ty) list
       ; constructors : (Ident.t * ty list) list
       ; position : Pos.pos * Pos.pos
       }
@@ -188,8 +188,7 @@ module PrettyIR = struct
         (ir value)
     | RecordType { ident; params; fields; _ } ->
       let params =
-        Map.to_alist ~key_order:`Increasing params
-        |> List.map ~f:(fun (ident, ty) ->
+        List.map params ~f:(fun (ident, ty) ->
           Printf.sprintf "(%s : %s)" (Ident.Intern.lookup ident) (ir_ty ty))
         |> String.concat ~sep:" "
       in
@@ -202,8 +201,7 @@ module PrettyIR = struct
       Printf.sprintf "data %s %s where\n%s\n\n" (Ident.Intern.lookup ident) params fields
     | SumType { ident; params; constructors; _ } ->
       let params =
-        Map.to_alist ~key_order:`Increasing params
-        |> List.map ~f:(fun (ident, ty) ->
+        List.map params ~f:(fun (ident, ty) ->
           Printf.sprintf "(%s : %s)" (Ident.Intern.lookup ident) (ir_ty ty))
         |> function
         | [] -> " "
@@ -231,13 +229,13 @@ module Context = struct
   include Writer.Make (M)
 end
 
-(* Constructor tag registry - maps constructor names to their alphabetical index *)
+(* Constructor registry - maps constructor names to (tag, arity) *)
 module CtorTags = struct
-  type _ Effect.t += Lookup : Ident.t -> int option Effect.t
+  type _ Effect.t += Lookup : Ident.t -> (int * int) option Effect.t
 
   let lookup name = Effect.perform (Lookup name)
 
-  let handle (ctor_tags : int Ident.Map.t) (f : unit -> 'a) : 'a =
+  let handle (ctor_tags : (int * int) Ident.Map.t) (f : unit -> 'a) : 'a =
     let open Effect.Deep in
     try_with
       f
@@ -256,7 +254,10 @@ end
 (* Shared lambda lifting utilities *)
 
 let rec convert_expr : Term.t -> t = function
-  | `Var v -> Var v
+  | `Var v ->
+    (match CtorTags.lookup v with
+     | Some (tag, 0) -> Ctor (tag, v, [])
+     | _ -> Var v)
   | `Lit literal -> Lit (convert_literal literal)
   | `App (f, x) ->
     (* Check if an argument is type-level (its type is Type) and should be erased *)
@@ -268,7 +269,22 @@ let rec convert_expr : Term.t -> t = function
       | `App (f', x') ->
         (* Skip type-level arguments (implicit type params) *)
         if is_type_arg x' then go acc f' else go (convert_expr x' :: acc) f'
-      | `Var ident -> App (ident, acc)
+      | `Var ident ->
+        (match CtorTags.lookup ident with
+         | Some (tag, arity) when List.length acc = arity -> Ctor (tag, ident, acc)
+         | Some _ when List.is_empty acc ->
+           (* Bare reference to a non-nullary constructor: a first-class
+              function value in the backend. *)
+           Var ident
+         | Some (_, arity) ->
+           failwith
+           @@ Printf.sprintf
+                "Partial application of constructor '%s' (%d of %d arguments) is not \
+                 yet supported"
+                (Ident.Intern.lookup ident)
+                (List.length acc)
+                arity
+         | None -> App (ident, acc))
       | `Ann (x, _) | `Pos (_, x) -> go acc x
       | other ->
         failwith
@@ -327,7 +343,7 @@ and convert_pattern : Term.t Term.pattern -> pattern = function
   | Term.PVar x -> PVar x
   | Term.PWild -> PWild
   | Term.PCtor (name, args) ->
-    let tag = CtorTags.lookup name |> Option.value ~default:0 in
+    let tag = CtorTags.lookup name |> Option.value_map ~default:0 ~f:fst in
     PCtor (tag, name, List.map ~f:convert_pattern args)
   | Term.PLit lit -> PLit (convert_literal lit)
   | Term.PRec _ -> failwith "Record patterns not yet implemented"
@@ -366,7 +382,10 @@ and convert_type : Term.t -> ty = function
   | `Meta _ -> Skolem
   | `Ann (x, _) | `Pos (_, x) -> convert_type x
   | `Type -> TVar (Ident.Intern.intern "Type") (* Kind of types *)
-  | `SumType { ident; _ } -> TVar ident (* Sum types become type variables in IR *)
+  | `Self _ ->
+    (* Encodings are conversion-only; metas always solve to nominal forms, so
+       a Self type reaching codegen is a checker bug. *)
+    failwith "Self type reached codegen; types must be nominal after zonking"
   | other ->
     failwith
     @@ Printf.sprintf
@@ -434,11 +453,11 @@ let convert : Term.t Term.declaration list -> declaration list =
       let ty = convert_type typ in
       Constant { ident; ty; value; position }
     | Term.RecordDecl { ident; params; fields; position } ->
-      let params = Map.map ~f:convert_type params
+      let params = List.map params ~f:(fun (x, ty) -> x, convert_type ty)
       and fields = Map.map ~f:convert_type fields in
       RecordType { ident; params; fields; position }
     | Term.SumDecl { ident; params; constructors; position } ->
-      let params = Map.map ~f:convert_type params in
+      let params = List.map params ~f:(fun (x, ty) -> x, convert_type ty) in
       let constructors =
         Map.to_alist ~key_order:`Increasing constructors
         |> List.map ~f:(fun (name, args) -> name, List.map ~f:convert_type args)
@@ -461,8 +480,8 @@ let convert : Term.t Term.declaration list -> declaration list =
       match decl with
       | Term.SumDecl { constructors; _ } ->
         let sorted_ctors = Map.to_alist ~key_order:`Increasing constructors in
-        List.foldi sorted_ctors ~init:acc ~f:(fun idx acc (ctor_name, _) ->
-          Map.set acc ~key:ctor_name ~data:idx)
+        List.foldi sorted_ctors ~init:acc ~f:(fun idx acc (ctor_name, fields) ->
+          Map.set acc ~key:ctor_name ~data:(idx, List.length fields))
       | _ -> acc)
   in
   let x, xs =

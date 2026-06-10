@@ -24,6 +24,7 @@ let rec zonk : Term.t -> Term.t = function
     let arms = List.map arms ~f:(fun (p, e) -> p, zonk e) in
     `Match (scrut, arms)
   | `Pos (p, tm) -> `Pos (p, zonk tm)
+  | `Self (x, body) -> `Self (x, zonk body)
   | `Infix { left; op; right } ->
     let left = zonk left in
     let op = zonk op in
@@ -33,10 +34,6 @@ let rec zonk : Term.t -> Term.t = function
     let fields = Map.map fields ~f:zonk in
     let tail = Option.map ~f:zonk tail in
     (`RecordType Term.{ fields; tail } : Term.t)
-  | `SumType { ident; params; constructors; position } ->
-    let params = Map.map params ~f:zonk in
-    let constructors = Map.map constructors ~f:(List.map ~f:zonk) in
-    `SumType Term.{ ident; params; constructors; position }
   | term -> term
 
 and zonk_lit : type a. (a -> a) -> a Term.literal -> a Term.literal =
@@ -59,6 +56,10 @@ and zonk_value : Term.value -> Term.value = function
     let var = `Neutral (Term.NVar (0, Ident.Intern.underscore)) in
     let cod = zonk_value (Context.lift_r (cod var)) in
     `Pi (plicity, x, dom, Fun.const (Ok cod))
+  | `Self (x, body) ->
+    let var = `Neutral (Term.NVar (0, x)) in
+    let body = zonk_value (Context.lift_r (body var)) in
+    `Self (x, Fun.const (Ok body))
   | `Ann (x, t) -> `Ann (zonk_value x, zonk_value t)
   | `Lit lit -> `Lit (zonk_lit zonk_value lit)
   | `Proj (tm, field) -> `Proj (zonk_value tm, field)
@@ -84,10 +85,6 @@ and zonk_value : Term.value -> Term.value = function
       | None -> None
     in
     (`RecordType { fields; tail } : Term.value)
-  | `SumType { ident; params; constructors; position } ->
-    let params = Map.map params ~f:zonk_value in
-    let constructors = Map.map constructors ~f:(List.map ~f:zonk_value) in
-    `SumType Term.{ ident; params; constructors; position }
   | t -> t
 ;;
 

@@ -1,0 +1,10 @@
+data Nat where
+| Zero
+| Succ Nat
+
+def bad (n : Nat) -> Int do
+  match n with
+  | Succ m -> 1
+
+def main () -> Int do
+  bad Zero

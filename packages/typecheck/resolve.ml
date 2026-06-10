@@ -199,21 +199,6 @@ let resolve_expr : traversal -> t -> t * traversal =
         | None -> None, state
       in
       `RecordType { fields; tail }, state
-    | `SumType { ident; params; constructors; position } ->
-      let params, state = traverse_map go state params in
-      let constructors, state =
-        traverse_map
-          (fun state args ->
-             let state, args =
-               List.fold_map args ~init:state ~f:(fun state ty ->
-                 let ty, state = go state ty in
-                 state, ty)
-             in
-             args, state)
-          state
-          constructors
-      in
-      `SumType { ident; params; constructors; position }, state
     | other -> other, state
   and literal state = function
     | Int n -> Int n, state

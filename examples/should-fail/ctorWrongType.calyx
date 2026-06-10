@@ -1,0 +1,16 @@
+data Nat where
+| Zero
+| Succ Nat
+
+data Maybe (a : Type) where
+| Just a
+| Nothing
+
+def bad (n : Nat) -> Int do
+  match n with
+  | Zero -> 0
+  | Just x -> 1
+  | Succ m -> 2
+
+def main () -> Int do
+  bad Zero

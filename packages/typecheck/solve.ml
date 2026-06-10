@@ -49,6 +49,9 @@ let rec occurs (m : Meta.t) (v : value) : bool =
   | `Lam (_, _, body) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     occurs m (Context.lift_r (body var))
+  | `Self (_, body) ->
+    let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
+    occurs m (Context.lift_r (body var))
   | `RecordType { fields; tail } ->
     List.exists (Map.data fields) ~f:(occurs m)
     || Option.exists tail ~f:(occurs m)
@@ -70,6 +73,13 @@ let solve_meta (m : Meta.t) (v : value) : unit =
   if occurs m v then Context.fail (`Occurs (Meta.show m)) else Meta.solve m v
 ;;
 
+(* Decompose a neutral into its head variable and application spine. *)
+let rec spine : neutral -> (Ident.t * value list) option = function
+  | NVar (_, head) -> Some (head, [])
+  | NApp (f, x) -> Option.map (spine f) ~f:(fun (head, args) -> head, args @ [ x ])
+  | _ -> None
+;;
+
 let rec unify : value -> value -> unit =
   fun a b ->
   let a = force a in
@@ -84,6 +94,15 @@ let rec unify : value -> value -> unit =
   | `Neutral (NMeta m1), `Neutral (NMeta m2) when Meta.equal m1 m2 -> ()
   | `Neutral (NMeta m), v | v, `Neutral (NMeta m) -> solve_meta m v
   | `Type, `Type -> ()
+  (* Delta unfolding (design/type_system.md §3.3): a nominal datatype or
+     constructor head is unfolded to its Scott encoding only when compared
+     against a non-neutral, non-meta value. Neutral-vs-neutral comparisons
+     stay structural (same head -> args; different heads -> sealed mismatch),
+     and metas always solve to the nominal form, never the encoding. *)
+  | `Neutral n, other when delta_redex n other ->
+    unify (Option.value_exn (unfold n)) other
+  | other, `Neutral n when delta_redex n other ->
+    unify other (Option.value_exn (unfold n))
   | `Lam (_, _, body1), `Lam (_, _, body2) ->
     let var = `Neutral (NVar (0, Ident.Intern.underscore)) in
     let body1 = Context.lift_r (body1 var) in
@@ -100,6 +119,11 @@ let rec unify : value -> value -> unit =
     let cod = Context.lift_r (cod var) in
     let cod' = Context.lift_r (cod' var) in
     Context.tell_constraint Constraint.(equals cod cod')
+  | `Self (x, body), `Self (_, body') ->
+    let var = `Neutral (NVar (0, x)) in
+    let body = Context.lift_r (body var) in
+    let body' = Context.lift_r (body' var) in
+    Context.tell_constraint Constraint.(equals body body')
   | (`Neutral (NVar (_, name)), `Var name' | `Var name, `Neutral (NVar (_, name')))
     when Ident.equal name name' -> ()
   | `Neutral (NVar (l_level, l_name)), `Neutral (NVar (r_level, r_name)) ->
@@ -113,11 +137,6 @@ let rec unify : value -> value -> unit =
   | `Neutral l, `Neutral r -> unify_neutral l r
   | `Lit l, `Lit r -> unify_lit l r
   | `RecordType a, `RecordType b -> unify_record_types a b
-  | `SumType a, `SumType b -> unify_sum_types a b
-  (* A neutral variable referring to a sum type by name *)
-  | `Neutral (NVar (_, name)), `SumType { ident; _ }
-  | `SumType { ident; _ }, `Neutral (NVar (_, name))
-    when Ident.equal name ident -> ()
   | `Err _, _ | _, `Err _ -> ()
   | a, b ->
     Context.fail
@@ -163,22 +182,6 @@ and unify_record_literals : value Ident.Map.t -> value Ident.Map.t -> unit =
   else
     Context.fail
     @@ `Expected (Ident.Map.show Term.show_value a, Ident.Map.show Term.show_value b)
-
-and unify_sum_types : value sum_type -> value sum_type -> unit =
-  fun a b ->
-  if Ident.equal a.ident b.ident
-  then
-    Map.fold2 a.constructors b.constructors ~init:() ~f:(fun ~key:_ ~data () ->
-      match data with
-      | `Both (args_a, args_b) ->
-        List.zip_exn args_a args_b
-        |> List.iter ~f:(fun (a, b) -> Context.tell_constraint (Constraint.equals a b))
-      | _ -> ())
-  else
-    Context.fail
-      (`UnificationFailure
-          ( Printf.sprintf "SumType %s" (Ident.Intern.lookup a.ident)
-          , Printf.sprintf "SumType %s" (Ident.Intern.lookup b.ident) ))
 
 and unify_record_types : value row -> value row -> unit =
   fun a b ->
@@ -228,6 +231,27 @@ and vapp =
   | `Lam (_, _, body) -> Context.lift_r @@ body x
   | `Neutral n -> `Neutral (NApp (n, x))
   | otherwise -> Context.fail (`Expected ("function", Term.show_value otherwise))
+
+(* One-step delta unfolding: replace a defined head constant with its Scott
+   encoding, applied to the spine arguments via NbE. The unfolded body's
+   interior references are themselves nominal neutrals, so repeated
+   unfolding terminates. *)
+and unfold : neutral -> value option =
+  fun n ->
+  match spine n with
+  | None -> None
+  | Some (head, args) ->
+    (match Context.lookup_defn head with
+     | Some (Context.Data { encoding; _ } | Context.Ctor { encoding; _ }) ->
+       Some (List.fold args ~init:encoding ~f:vapp)
+     | None -> None)
+
+and delta_redex : neutral -> value -> bool =
+  fun n other ->
+  (match other with
+   | `Neutral _ | `Err _ -> false
+   | _ -> true)
+  && Option.is_some (unfold n)
 ;;
 
 type solver_error =

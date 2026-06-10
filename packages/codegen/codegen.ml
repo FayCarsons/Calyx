@@ -12,9 +12,6 @@ module type M = sig
   *)
   val standard_library : Context.entry Ident.Map.t
 
-  (** Type renaming, i.e. WGSL requires we rename 'Int' to 'i32' *)
-  val map_types : Ident.t Ident.Map.t
-
   (** Native infix functions, do not need to be renamed *)
   val native_infix : Ident.t list
 

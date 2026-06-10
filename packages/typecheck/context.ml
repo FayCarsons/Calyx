@@ -24,12 +24,42 @@ type scope =
   ; level : int
   }
 
+(** A datatype constructor's elaboration artifacts (design/type_system.md §3):
+    the nominal Pi type used for checking applications and patterns, and the
+    Scott-encoded delta body used only by conversion. *)
+type ctor_info =
+  { ctor_name : Ident.t
+  ; datatype : Ident.t
+  ; tag : int (* index in Map.to_alist order; must match Ir.CtorTags *)
+  ; arity : int (* number of explicit fields *)
+  ; ctor_type : Term.value
+  ; encoding : Term.value
+  }
+
+type data_info =
+  { data_name : Ident.t
+  ; param_arity : int
+  ; kind : Term.value
+  ; ctors : ctor_info list (* in tag order *)
+  ; encoding : Term.value
+  }
+
+type definition =
+  | Data of data_info
+  | Ctor of ctor_info
+
 (** The state part: threaded purely through [run]'s handler as a
-    [state -> 'r] answer function. No refs. *)
+    [state -> 'r] answer function. No refs.
+
+    [definitions] lives in state rather than in scope entries because it must
+    be visible during the final [Solve.solve] call, which runs after all
+    lexical [with_binding] scopes from inference have unwound but still inside
+    [run]. [Solve.solve] must therefore remain inside [Context.run]. *)
 type state =
   { meta_gen : Term.Meta.Id.t
   ; errors : Calyx_error.t list
   ; constraints : Constraint.t list
+  ; definitions : definition Ident.Map.t
   }
 
 type _ Effect.t +=
@@ -39,6 +69,8 @@ type _ Effect.t +=
   | Take_constraints : Constraint.t list Effect.t
   | Has_constraints : bool Effect.t
   | Fresh_meta : int -> Term.Meta.t Effect.t
+  | Define : Ident.t * definition -> unit Effect.t
+  | Lookup_defn : Ident.t -> definition option Effect.t
 
 (** Fatal checker failure; caught by [run] (and by [close] at HOAS closure
     boundaries). *)
@@ -165,6 +197,30 @@ let take_constraints : unit -> Constraint.t list =
 let has_constraints : unit -> bool = fun () -> Effect.perform Has_constraints
 let fresh_meta : unit -> Term.Meta.t = fun () -> Effect.perform (Fresh_meta (level ()))
 
+(* {1 Definitions} *)
+
+let define : Ident.t -> definition -> unit =
+  fun ident defn -> Effect.perform (Define (ident, defn))
+;;
+
+let lookup_defn : Ident.t -> definition option =
+  fun ident -> Effect.perform (Lookup_defn ident)
+;;
+
+let lookup_data : Ident.t -> data_info option =
+  fun ident ->
+  match lookup_defn ident with
+  | Some (Data info) -> Some info
+  | _ -> None
+;;
+
+let lookup_ctor : Ident.t -> ctor_info option =
+  fun ident ->
+  match lookup_defn ident with
+  | Some (Ctor info) -> Some info
+  | _ -> None
+;;
+
 (* {1 Tracing} *)
 
 let trace : type i o. (i, o) Trace.stage -> i -> Lexing.position -> (unit -> o) -> o =
@@ -207,7 +263,9 @@ let run
   fun ?(bindings = Ident.Map.empty) f ->
   let open Effect.Deep in
   let init_scope = { bindings; pos = Pos.empty; level = 0 } in
-  let init_state = { meta_gen = 0; errors = []; constraints = [] } in
+  let init_state =
+    { meta_gen = 0; errors = []; constraints = []; definitions = Ident.Map.empty }
+  in
   let comp =
     match_with
       (fun () -> under_scope init_scope f)
@@ -239,6 +297,15 @@ let run
                 (fun k st ->
                   let meta = Term.Meta.make ~id:st.meta_gen ~level:lvl () in
                   continue k meta { st with meta_gen = succ st.meta_gen })
+            | Define (ident, defn) ->
+              Some
+                (fun k st ->
+                  continue
+                    k
+                    ()
+                    { st with definitions = Map.set st.definitions ~key:ident ~data:defn })
+            | Lookup_defn ident ->
+              Some (fun k st -> continue k (Map.find st.definitions ident) st)
             | _ -> None)
       }
   in

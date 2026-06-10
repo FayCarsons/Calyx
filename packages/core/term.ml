@@ -137,7 +137,7 @@ let map_pos : f:('a -> 'b) -> [ `Pos of Pos.t * 'a ] -> [ `Pos of Pos.t * 'b ] =
 
 type 'a sum_type =
   { ident : Ident.t
-  ; params : 'a Ident.Map.t
+  ; params : (Ident.t * 'a) list (* in source order *)
   ; constructors : 'a list Ident.Map.t
   ; position : Pos.pos * Pos.pos
   }
@@ -154,7 +154,9 @@ type t =
   | `Pos of Pos.t * t
   | `Meta of meta
   | `RecordType of t row
-  | `SumType of t sum_type
+  | `Self of Ident.t * t
+    (* Fu-Stump self type [$x. T]: x is bound in T to the term being typed.
+       Never surface syntax; produced only by datatype elaboration. *)
   ]
 [@@deriving show, sexp]
 
@@ -162,8 +164,8 @@ and value =
   [ value base
   | `Lam of plicity * Ident.t * (value -> (value, Calyx_error.t) result)
   | `Pi of plicity * Ident.t * value * (value -> (value, Calyx_error.t) result)
+  | `Self of Ident.t * (value -> (value, Calyx_error.t) result)
   | `RecordType of value row
-  | `SumType of value sum_type
   | `Neutral of neutral
   | `Opaque
   ]
@@ -261,16 +263,11 @@ module FreeVars = struct
   let rec of_ast : t -> S.t = function
     | `Pos (_, t) -> of_ast t
     | `Meta _ -> S.empty
+    | `Self (x, body) -> Set.remove (of_ast body) x
     | `RecordType { fields; tail } ->
       let field_vars = Map.data fields |> List.map ~f:of_ast |> S.union_list in
       let tail_var = Option.value_map tail ~default:S.empty ~f:of_ast in
       Set.union field_vars tail_var
-    | `SumType { params; constructors; _ } ->
-      let param_vars = Map.data params |> List.map ~f:of_ast |> S.union_list in
-      let ctor_vars =
-        Map.data constructors |> List.bind ~f:(List.map ~f:of_ast) |> S.union_list
-      in
-      Set.union param_vars ctor_vars
     | #base as b -> of_base of_ast b
     | #term_binders as binder -> of_binders of_ast binder
   ;;
@@ -294,7 +291,7 @@ type 'a declaration =
       }
   | RecordDecl of
       { ident : Ident.t
-      ; params : 'a Ident.Map.t
+      ; params : (Ident.t * 'a) list
       ; fields : 'a Ident.Map.t
       ; position : Pos.pos * Pos.pos
       }
@@ -311,11 +308,11 @@ let desugar_toplevel = function
     and body = desugar body in
     Constant { ident; typ; body; position }
   | RecordDecl { ident; params; fields; position } ->
-    let params = Map.map params ~f:desugar
+    let params = List.map params ~f:(fun (x, ty) -> x, desugar ty)
     and fields = Map.map fields ~f:desugar in
     RecordDecl { ident; params; fields; position }
   | SumDecl { ident; params; constructors; position } ->
-    let params = Map.map params ~f:desugar
+    let params = List.map params ~f:(fun (x, ty) -> x, desugar ty)
     and constructors = Map.map constructors ~f:(List.map ~f:desugar) in
     SumDecl { ident; params; constructors; position }
 ;;

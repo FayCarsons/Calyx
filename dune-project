@@ -37,7 +37,7 @@
 
 (package
  (name calyx-codegen)
- (synopsis "Calyx WGSL and JavaScript code generation")
+ (synopsis "Calyx JavaScript code generation")
  (depends ocaml dune core calyx calyx-typecheck))
 
 (package

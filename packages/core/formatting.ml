@@ -248,7 +248,7 @@ let declaration ?(opts = Options.default) : Term.cst Term.declaration -> documen
       (string "const " ^^ ident name ^^ colon ^^ cst ~opts typ ^^ equals ^^ cst ~opts body)
   | Term.RecordDecl { ident = name; params; fields; _ } ->
     let params_doc =
-      if Map.is_empty params
+      if List.is_empty params
       then empty
       else
         space
@@ -256,7 +256,7 @@ let declaration ?(opts = Options.default) : Term.cst Term.declaration -> documen
              space
              (List.map
                 ~f:(fun (id, ty) -> parens (ident id ^^ colon ^^ cst ~opts ty))
-                (Map.to_alist params))
+                params)
     in
     let field_doc (fname, fty) = ident fname ^^ colon ^^ cst ~opts fty in
     let fields_doc =
@@ -270,7 +270,7 @@ let declaration ?(opts = Options.default) : Term.cst Term.declaration -> documen
        ^^ nest opts.indent (hardline ^^ fields_doc))
   | Term.SumDecl { ident = name; params; constructors; _ } ->
     let params_doc =
-      if Map.is_empty params
+      if List.is_empty params
       then empty
       else
         space
@@ -278,7 +278,7 @@ let declaration ?(opts = Options.default) : Term.cst Term.declaration -> documen
              space
              (List.map
                 ~f:(fun (id, ty) -> parens (ident id ^^ colon ^^ cst ~opts ty))
-                (Map.to_alist params))
+                params)
     in
     let ctor_doc (cname, args) =
       pipe

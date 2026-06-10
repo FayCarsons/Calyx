@@ -47,7 +47,7 @@ let program :=
 
 let declaration :=
   | def_decl
-  | const_decl  
+  | const_decl
   | data_decl
 
 let def_decl :=
@@ -77,15 +77,13 @@ let const_decl :=
 
 let data_decl :=
   | DATA; ident = IDENT; params = type_param*; WHERE; fields = record_type_fields; {
-    let position = (Pos.pos_of_position  $startpos, Pos.pos_of_position $endpos) 
-    and params = Ident.Map.of_alist_exn params in
+    let position = (Pos.pos_of_position  $startpos, Pos.pos_of_position $endpos) in
     RecordDecl { ident; params; fields; position }
   }
   | DATA; ident = IDENT; params = type_param*; WHERE; constructors = constructor+; {
-    let position = (Pos.pos_of_position  $startpos, Pos.pos_of_position $endpos) 
-    and constructors = Ident.Map.of_alist_exn constructors
-    and params = Ident.Map.of_alist_exn params in
-SumDecl { ident; params; constructors; position }
+    let position = (Pos.pos_of_position  $startpos, Pos.pos_of_position $endpos)
+    and constructors = Ident.Map.of_alist_exn constructors in
+    SumDecl { ident; params; constructors; position }
   }
 
 let type_param :=
@@ -181,8 +179,8 @@ let match_arm :=
   | p = pattern; ARROW; e = expr; { (p, e) }
 
 let pattern :=
-  | x = IDENT; ps = pattern_atom+; { 
-      PCtor (x, ps) 
+  | x = IDENT; ps = pattern_atom+; {
+      PCtor (x, ps)
     }
   | p = pattern_atom; { p }
 

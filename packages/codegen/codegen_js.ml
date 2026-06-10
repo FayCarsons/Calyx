@@ -8,17 +8,7 @@ module Javascript : Codegen.M = struct
     let open Term in
     Ident.Map.of_alist_exn
       [ Intern.intern "Int", Context.Typed (`Opaque, `Type)
-      ; ( Intern.intern "Bool"
-        , Context.Typed
-            ( `SumType
-                { ident = Intern.intern "Bool"
-                ; params = Ident.Map.empty
-                ; constructors =
-                    Ident.Map.of_alist_exn
-                      [ Intern.intern "True", []; Intern.intern "False", [] ]
-                ; position = Pos.pos_empty, Pos.pos_empty
-                }
-            , `Type ) )
+      ; Intern.intern "Bool", Context.Typed (`Opaque, `Type)
       ; Intern.intern "Unit", Context.Typed (`Opaque, `Type)
       ; ( Intern.intern "+"
         , Context.Typed
@@ -224,7 +214,6 @@ module Javascript : Codegen.M = struct
 
   let execute = Some "node"
   let extension = "js"
-  let map_types = Ident.Map.empty
   let native_infix = List.map ~f:Intern.intern [ "+"; "-"; "*"; "/"; "<"; ">" ]
   let var = name
   let int = string_of_int
@@ -260,16 +249,16 @@ module Javascript : Codegen.M = struct
     | Ctor (tag, ctor_name, args) ->
       let ctor_str = name ctor_name in
       (match args with
-       | [] -> Printf.sprintf "/* %s */ { _tag: %d }" ctor_str tag
+       | [] -> Printf.sprintf "({ _tag: %d } /* %s */)" tag ctor_str
        | _ ->
          let fields =
            List.mapi args ~f:(fun i a -> Printf.sprintf "_%d: %s" i (compile_expr a))
          in
          Printf.sprintf
-           "/* %s */ { _tag: %d, %s }"
-           ctor_str
+           "({ _tag: %d, %s } /* %s */)"
            tag
-           (String.concat ~sep:", " fields))
+           (String.concat ~sep:", " fields)
+           ctor_str)
     | Infix (left, op, right) ->
       let left_expr = compile_expr left in
       let right_expr = compile_expr right in

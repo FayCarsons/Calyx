@@ -1,16 +1,12 @@
 open Core
 
-type backend =
-  | WGSL
-  | JS
+type backend = JS
 
 let impl_of_backend = function
-  | WGSL -> (module Codegen_wgsl.WGSL : Codegen.M)
   | JS -> (module Codegen_js.Javascript : Codegen.M)
 ;;
 
 let backend_of_string = function
-  | s when String.equal (String.lowercase s) "wgsl" -> Ok WGSL
   | s when String.equal (String.lowercase s) "js" -> Ok JS
   | other -> Error (`Msg (Printf.sprintf "Unsupported backend '%s'" other))
 ;;
@@ -94,10 +90,9 @@ let path =
 
 let backend =
   let open Cmdliner in
-  let doc = "Target backend (wgsl or js)" in
+  let doc = "Target backend (js)" in
   let print : backend Arg.printer =
     fun fmt -> function
-      | WGSL -> Format.fprintf fmt "wgsl"
       | JS -> Format.fprintf fmt "js"
   in
   let backend_conv = Arg.conv (backend_of_string, print) in

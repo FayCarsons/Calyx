@@ -8,7 +8,10 @@ def fromNat (self : Nat) -> Int do
   | Succ n -> 1 + fromNat n
 
 def fromInt (n : Int) -> Nat do
-  if n > 0 then Succ (fromInt (n - 1)) else Zero 
+  if n > 0 then
+    Succ (fromInt (n - 1)) 
+  else
+    Zero
 
 def repeat (self : Nat) (f : Nat -> Nat) (x : Nat) -> Nat do
   match self with

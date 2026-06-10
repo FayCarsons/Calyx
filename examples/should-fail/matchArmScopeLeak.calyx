@@ -1,0 +1,7 @@
+data Pair where
+| MkPair Int Int
+
+def main () -> Int do
+  match MkPair 1 2 with
+  | MkPair first second -> first
+  | other -> second

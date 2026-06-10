@@ -4,6 +4,8 @@ CLAUDE.md
 
 # OCaml/Dune build artifacts
 _build/
+# Machine-specific dev-shell toolchain paths (see file header)
+dune-workspace.dev
 *.install
 *.merlin
 .merlin

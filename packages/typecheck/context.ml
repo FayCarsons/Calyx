@@ -15,289 +15,232 @@ let entry_typ : entry -> Term.value option = function
   | _ -> None
 ;;
 
-type ctx =
+(** The reader part of the checker's environment. Scoped via nested deep
+    handlers: a binding's lifetime is exactly its handler's extent, so it is
+    impossible for a binding to leak into a sibling scope. *)
+type scope =
   { bindings : entry Ident.Map.t
   ; pos : Pos.t
   ; level : int
-  ; meta_gen : Term.Meta.Id.t
+  }
+
+(** The state part: threaded purely through [run]'s handler as a
+    [state -> 'r] answer function. No refs. *)
+type state =
+  { meta_gen : Term.Meta.Id.t
   ; errors : Calyx_error.t list
   ; constraints : Constraint.t list
   }
-[@@deriving sexp]
 
-let empty : ctx =
-  { bindings = Ident.Map.empty
-  ; pos = Pos.empty
-  ; level = 0
-  ; meta_gen = 0
-  ; errors = []
-  ; constraints = []
-  }
+type _ Effect.t +=
+  | Scope : scope Effect.t
+  | Tell_error : Calyx_error.t -> unit Effect.t
+  | Tell_constraint : Constraint.t -> unit Effect.t
+  | Take_constraints : Constraint.t list Effect.t
+  | Has_constraints : bool Effect.t
+  | Fresh_meta : int -> Term.Meta.t Effect.t
+
+(** Fatal checker failure; caught by [run] (and by [close] at HOAS closure
+    boundaries). *)
+exception Fail of Calyx_error.t
+
+let fail : Calyx_error.t -> 'a = fun e -> raise (Fail e)
+
+let lift_r : ('a, Calyx_error.t) result -> 'a = function
+  | Ok x -> x
+  | Error e -> fail e
 ;;
 
-type 'a t = { run : 'r. ctx -> ('a -> ctx -> 'r) -> (ctx -> 'r) -> 'r }
-
-let pure : 'a -> 'a t = fun x -> { run = (fun ctx ok _ -> ok x ctx) }
-
-let bind : 'a t -> f:('a -> 'b t) -> 'b t =
-  fun m ~f ->
-  { run = (fun ctx ok err -> m.run ctx (fun a ctx' -> (f a).run ctx' ok err) err) }
+let lift_o_or_fail : error:Calyx_error.t -> 'a option -> 'a =
+  fun ~error -> function
+  | Some x -> x
+  | None -> fail error
 ;;
 
-let map : f:('a -> 'b) -> 'a t -> 'b t =
-  fun ~f m -> { run = (fun ctx ok err -> m.run ctx (fun a ctx' -> ok (f a) ctx') err) }
+(* {1 Reader} *)
+
+let scope () : scope = Effect.perform Scope
+let level () : int = (scope ()).level
+let pos () : Pos.t = (scope ()).pos
+let bindings () : entry Ident.Map.t = (scope ()).bindings
+let lookup : Ident.t -> entry option = fun ident -> Map.find (bindings ()) ident
+
+let lookup_value : Ident.t -> Term.value option =
+  fun ident -> Option.map ~f:entry_value (lookup ident)
 ;;
 
-let map2 : f:('a -> 'b -> 'c) -> 'a t -> 'b t -> 'c t =
-  fun ~f ma mb ->
-  { run =
-      (fun ctx ok err ->
-        ma.run ctx (fun a ctx' -> mb.run ctx' (fun b ctx'' -> ok (f a b) ctx'') err) err)
-  }
+let lookup_type : Ident.t -> Term.value option =
+  fun ident -> Option.bind ~f:entry_typ (lookup ident)
 ;;
 
-let product : 'a t -> 'b t -> ('a * 'b) t = fun ma mb -> map2 ~f:(fun a b -> a, b) ma mb
-let ask : ctx t = { run = (fun ctx ok _err -> ok ctx ctx) }
-let asks (f : ctx -> 'a) : 'a t = { run = (fun ctx ok _err -> ok (f ctx) ctx) }
+let is_bound : Ident.t -> bool = fun ident -> Option.is_some (lookup ident)
 
-let local : f:(ctx -> ctx) -> 'a t -> 'a t =
-  fun ~f m -> { run = (fun ctx ok err -> m.run (f ctx) ok err) }
+(** Run [f] with [sc] as the current scope. The handler is deep ([try_with]),
+    so it persists for every [Scope] perform within [f] and vanishes when [f]
+    returns; all other effects are declined ([None]) and forward outward. *)
+let under_scope : type a. scope -> (unit -> a) -> a =
+  fun sc f ->
+  let open Effect.Deep in
+  try_with
+    f
+    ()
+    { effc =
+        (fun (type b) (eff : b Effect.t) ->
+          match eff with
+          | Scope -> Some (fun (k : (b, _) continuation) -> continue k sc)
+          | _ -> None)
+    }
 ;;
 
-let tell_error : Calyx_error.t -> unit t =
-  fun e -> { run = (fun ctx ok _err -> ok () { ctx with errors = e :: ctx.errors }) }
+let with_scope : f:(scope -> scope) -> (unit -> 'a) -> 'a =
+  fun ~f body -> under_scope (f (scope ())) body
 ;;
 
-let fail : Calyx_error.t -> 'a t =
-  fun e -> { run = (fun ctx _ok err -> err { ctx with errors = e :: ctx.errors }) }
+let entry_of ~value ?typ () =
+  match typ with
+  | Some t -> Typed (value, t)
+  | None -> Untyped value
 ;;
 
-let fallible : default:'a -> 'a t -> 'a t =
-  fun ~default m -> { run = (fun ctx ok _ -> m.run ctx ok (ok default)) }
+let with_binding : Ident.t -> value:Term.value -> ?typ:Term.value -> (unit -> 'a) -> 'a =
+  fun ident ~value ?typ body ->
+  let data = entry_of ~value ?typ () in
+  with_scope
+    ~f:(fun sc -> { sc with bindings = Map.set sc.bindings ~key:ident ~data })
+    body
 ;;
 
-let lift_r : ('a, Calyx_error.t) result -> 'a t =
-  fun r ->
-  { run =
-      (fun ctx ok err ->
-        match r with
-        | Ok a -> ok a ctx
-        | Error e -> err { ctx with errors = e :: ctx.errors })
-  }
+let with_bindings : (Ident.t * entry) list -> (unit -> 'a) -> 'a =
+  fun entries body ->
+  with_scope
+    ~f:(fun sc ->
+      { sc with
+        bindings =
+          List.fold entries ~init:sc.bindings ~f:(fun acc (key, data) ->
+            Map.set acc ~key ~data)
+      })
+    body
 ;;
 
-let lift_o : default:'a -> 'a option -> 'a t =
-  fun ~default m -> { run = (fun ctx ok _ -> ok (Option.value ~default m) ctx) }
+let with_pos : Pos.t -> (unit -> 'a) -> 'a =
+  fun pos body -> with_scope ~f:(fun sc -> { sc with pos }) body
 ;;
 
-let lift_o_or_fail : error:Calyx_error.t -> 'a option -> 'a t =
-  fun ~error o ->
-  { run =
-      (fun ctx ok err ->
-        match o with
-        | Some x -> ok x ctx
-        | None -> err { ctx with errors = error :: ctx.errors })
-  }
-;;
-
-let errors : Calyx_error.t list t = asks (fun ctx -> ctx.errors)
-
-let tell_constraint : Constraint.t -> unit t =
-  fun c ->
-  { run = (fun ctx ok _err -> ok () { ctx with constraints = c :: ctx.constraints }) }
-;;
-
-let take_constraints : Constraint.t list t =
-  { run = (fun ctx ok _ -> ok ctx.constraints { ctx with constraints = [] }) }
-;;
-
-let has_constraints : bool t =
-  { run =
-      (fun ctx ok _ ->
-        ok
-          (match ctx.constraints with
-           | _ :: _ -> true
-           | _ -> false)
-          ctx)
-  }
-;;
-
-let fresh_meta : Term.Meta.t t =
-  { run =
-      (fun ctx ok _err ->
-        let id = ctx.meta_gen in
-        let meta = Term.Meta.make ~id ~level:ctx.level () in
-        ok meta { ctx with meta_gen = succ id })
-  }
-;;
-
-let level : int t = asks (fun ctx -> ctx.level)
-let pos : Pos.t t = asks (fun ctx -> ctx.pos)
-
-let lookup : Ident.t -> entry option t =
-  fun ident -> asks (fun ctx -> Map.find ctx.bindings ident)
-;;
-
-let lookup_value : Ident.t -> Term.value option t =
-  Fun.compose (map ~f:(Option.map ~f:entry_value)) lookup
-;;
-
-let lookup_type : Ident.t -> Term.value option t =
-  Fun.compose (map ~f:(Option.bind ~f:entry_typ)) lookup
-;;
-
-let is_bound : Ident.t -> bool t = Fun.compose (map ~f:Option.is_some) lookup
-
-let with_binding : Ident.t -> value:Term.value -> ?typ:Term.value -> ctx -> ctx =
-  fun ident ~value ?typ ctx ->
-  let entry =
-    match typ with
-    | Some t -> Typed (value, t)
-    | None -> Untyped value
-  in
-  { ctx with bindings = Map.set ctx.bindings ~key:ident ~data:entry }
-;;
-
-let with_pos : Pos.t -> ctx -> ctx = fun pos ctx -> { ctx with pos }
-let incr_level : ctx -> ctx = fun ctx -> { ctx with level = succ ctx.level }
-
-let with_var : Ident.t -> typ:Term.value -> f:(Term.value -> 'a t) -> 'a t =
+(** Bind [ident] to a fresh neutral at the current level, increment the level
+    within the extent of [f]. *)
+let with_var : Ident.t -> typ:Term.value -> f:(Term.value -> 'a) -> 'a =
   fun ident ~typ ~f ->
-  { run =
-      (fun ctx ok err ->
-        let lvl = ctx.level in
-        let var = `Neutral (Term.NVar (lvl, ident)) in
-        let ctx' =
-          { ctx with
-            level = lvl + 1
-          ; bindings = Map.set ctx.bindings ~key:ident ~data:(Typed (var, typ))
-          }
-        in
-        (f var).run ctx' ok err)
-  }
+  let sc = scope () in
+  let var = `Neutral (Term.NVar (sc.level, ident)) in
+  under_scope
+    { sc with
+      level = sc.level + 1
+    ; bindings = Map.set sc.bindings ~key:ident ~data:(Typed (var, typ))
+    }
+    (fun () -> f var)
 ;;
 
-let close : f:('a -> 'b t) -> ('a -> ('b, Calyx_error.t) result) t =
+(** Capture the current scope into an OCaml closure (HOAS). At invocation time
+    the snapshot scope is re-installed, so the body sees its lexical
+    environment; state effects (constraints, errors, metas) forward to
+    whichever [run] is live at invocation. *)
+let close : f:('a -> 'b) -> 'a -> ('b, Calyx_error.t) result =
   fun ~f ->
-  { run =
-      (fun ctx ok _err ->
-        let frozen_bindings = ctx.bindings in
-        let frozen_level = ctx.level in
-        let closure x =
-          let scoped_ctx =
-            { ctx with bindings = frozen_bindings; level = frozen_level }
-          in
-          (f x).run
-            scoped_ctx
-            (fun b _ctx' -> Ok b)
-            (fun ctx' ->
-               match ctx'.errors with
-               | e :: _ -> Error e
-               | [] -> Error `Todo)
-        in
-        ok closure ctx)
-  }
+  let snapshot = scope () in
+  fun x ->
+    match under_scope snapshot (fun () -> f x) with
+    | v -> Ok v
+    | exception Fail e -> Error e
 ;;
 
-let run : ctx -> 'a t -> ('a, Calyx_error.t list) result * ctx =
-  fun ctx m ->
-  m.run
-    ctx
-    (fun a ctx' -> Ok a, ctx')
-    (fun ctx' ->
-       match ctx'.errors with
-       | _ :: _ as es -> Error es, ctx'
-       | [] -> assert false)
+(* {1 State} *)
+
+let tell_error : Calyx_error.t -> unit = fun e -> Effect.perform (Tell_error e)
+let tell_constraint : Constraint.t -> unit = fun c -> Effect.perform (Tell_constraint c)
+
+let take_constraints : unit -> Constraint.t list =
+  fun () -> Effect.perform Take_constraints
 ;;
 
-let start : 'a t -> ('a, Calyx_error.t list) result * ctx = fun m -> run empty m
-let from_bindings : entry Ident.Map.t -> ctx = fun bindings -> { empty with bindings }
+let has_constraints : unit -> bool = fun () -> Effect.perform Has_constraints
+let fresh_meta : unit -> Term.Meta.t = fun () -> Effect.perform (Fresh_meta (level ()))
 
-module Syntax = struct
-  let ( let* ) m f = bind m ~f
-  let ( and* ) m f = bind m ~f
-  let ( let+ ) m f = map ~f m
-  let ( and+ ) = product
-  let ( >>= ) m f = bind m ~f
-  let ( >|= ) m f = map ~f m
+(* {1 Tracing} *)
 
-  let ( <*> ) fm m =
-    let* f = fm in
-    map ~f m
-  ;;
-end
-
-let rec sequence (ms : 'a t list) : 'a list t =
-  match ms with
-  | [] -> pure []
-  | m :: rest ->
-    let open Syntax in
-    let* x = m in
-    let* xs = sequence rest in
-    pure (x :: xs)
+let trace : type i o. (i, o) Trace.stage -> i -> Lexing.position -> (unit -> o) -> o =
+  fun stage focus here f ->
+  let sc = scope () in
+  let context =
+    lazy
+      (Map.to_alist sc.bindings
+       |> List.map ~f:(function
+         | ident, Untyped tm -> Ident.Intern.lookup ident, tm, None
+         | ident, Typed (tm, typ) -> Ident.Intern.lookup ident, tm, Some typ))
+  in
+  let source_location =
+    Trace.{ file = here.Lexing.pos_fname; line = here.Lexing.pos_lnum }
+  in
+  let judgement = Trace.{ stage; focus; context; location = sc.pos; source_location } in
+  match Trace.enter judgement with
+  | Abort -> raise Trace.Trace_aborted
+  | _ ->
+    (match f () with
+     | result ->
+       let (_ : Trace.step_action) = Trace.leave judgement (Trace.Succeeded result) in
+       result
+     | exception (Fail e as exn) ->
+       let (_ : Trace.step_action) = Trace.leave judgement (Trace.Failed e) in
+       raise exn)
 ;;
 
-let traverse : f:('a -> 'b t) -> 'a list -> 'b list t =
-  fun ~f xs -> sequence @@ List.map ~f xs
-;;
+(* {1 Running} *)
 
-let traverse_map : f:('a -> 'b t) -> ('key, 'a, 'cmp) Map.t -> ('key, 'b, 'cmp) Map.t t =
-  fun ~f m ->
-  Map.fold
-    m
-    ~init:(pure (Map.empty (Map.comparator_s m)))
-    ~f:(fun ~key ~data acc ->
-      let open Syntax in
-      let* acc = acc in
-      let* data' = f data in
-      pure (Map.set acc ~key ~data:data'))
-;;
+(** Install the state handler and an initial scope, then run [f].
 
-let rec fold_left : f:('acc -> 'a -> 'acc t) -> init:'acc -> 'a list -> 'acc t =
-  fun ~f ~init xs ->
-  match xs with
-  | [] -> pure init
-  | x :: rest ->
-    let open Syntax in
-    let* acc = f init x in
-    fold_left ~f ~init:acc rest
-;;
-
-let trace : ('i, 'o) Trace.stage -> 'i -> Lexing.position -> 'o t -> 'o t =
-  fun stage focus here m ->
-  { run =
-      (fun ctx ok err ->
-        let context =
-          lazy
-            (Map.to_alist ctx.bindings
-             |> List.map ~f:(function
-               | ident, Untyped tm -> Ident.Intern.lookup ident, tm, None
-               | ident, Typed (tm, typ) -> Ident.Intern.lookup ident, tm, Some typ))
-        in
-        let source_location =
-          Trace.{ file = here.Lexing.pos_fname; line = here.Lexing.pos_lnum }
-        in
-        let judgement =
-          Trace.{ stage; focus; context; location = ctx.pos; source_location }
-        in
-        let action = Trace.enter judgement in
-        match action with
-        | Abort -> raise Trace.Trace_aborted
-        | _ ->
-          m.run
-            ctx
-            (fun a ctx' ->
-               let outcome = Trace.Succeeded a in
-               let _ = Trace.leave judgement outcome in
-               ok a ctx')
-            (fun ctx' ->
-               let outcome =
-                 Trace.Failed
-                   (match ctx'.errors with
-                    | e :: _ -> e
-                    | [] -> `Todo)
-               in
-               let _ = Trace.leave judgement outcome in
-               err ctx'))
-  }
+    State is threaded purely: the handler's answer type is
+    [state -> ('a, errors) result * state], so every resumption applies the
+    continuation to an updated state value — no mutation, nothing to roll
+    back or reset. *)
+let run
+  : ?bindings:entry Ident.Map.t -> (unit -> 'a) -> ('a, Calyx_error.t list) result * state
+  =
+  fun ?(bindings = Ident.Map.empty) f ->
+  let open Effect.Deep in
+  let init_scope = { bindings; pos = Pos.empty; level = 0 } in
+  let init_state = { meta_gen = 0; errors = []; constraints = [] } in
+  let comp =
+    match_with
+      (fun () -> under_scope init_scope f)
+      ()
+      { retc = (fun x st -> Ok x, st)
+      ; exnc =
+          (function
+            | Fail e ->
+              fun st ->
+                let st = { st with errors = e :: st.errors } in
+                Error st.errors, st
+            | exn -> raise exn)
+      ; effc =
+          (fun (type b) (eff : b Effect.t) ->
+            match eff with
+            | Tell_error e ->
+              Some
+                (fun (k : (b, _) continuation) st ->
+                  continue k () { st with errors = e :: st.errors })
+            | Tell_constraint c ->
+              Some
+                (fun k st -> continue k () { st with constraints = c :: st.constraints })
+            | Take_constraints ->
+              Some (fun k st -> continue k st.constraints { st with constraints = [] })
+            | Has_constraints ->
+              Some (fun k st -> continue k (not (List.is_empty st.constraints)) st)
+            | Fresh_meta lvl ->
+              Some
+                (fun k st ->
+                  let meta = Term.Meta.make ~id:st.meta_gen ~level:lvl () in
+                  continue k meta { st with meta_gen = succ st.meta_gen })
+            | _ -> None)
+      }
+  in
+  comp init_state
 ;;

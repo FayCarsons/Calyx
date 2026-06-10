@@ -1,0 +1,2 @@
+def main () -> Int do
+  (let leaked : Int = 1 in leaked) + leaked

@@ -63,16 +63,18 @@ let step backend path =
   let source = In_channel.read_all path in
   match
     Stepper.run ~source ~f:(fun () ->
-      Context.run
-        (Context.from_bindings Backend.standard_library)
-        (let open Context.Syntax in
-         let* toplevels =
-           Parse.run source |> Result.map_error ~f:(fun e -> `Parser e) |> Context.lift_r
-         in
-         let desugared = List.map ~f:Term.desugar_toplevel toplevels in
-         let* inferred = Checker.infer_toplevel desugared in
-         Context.pure inferred)
-      |> fst)
+      match Parse.run source with
+      | Error e -> Error [ `Parser e ]
+      | Ok toplevels ->
+        let desugared = List.map ~f:Term.desugar_toplevel toplevels in
+        let result, state =
+          Context.run ~bindings:Backend.standard_library (fun () ->
+            Checker.infer_toplevel desugared)
+        in
+        (match result, state.Context.errors with
+         | Ok inferred, [] -> Ok inferred
+         | Ok _, errors -> Error (List.rev errors)
+         | Error errors, _ -> Error (List.rev errors)))
   with
   | Ok inferred ->
     Printf.printf "Type checking succeeded with %d declarations\n" (List.length inferred)

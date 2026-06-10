@@ -42,24 +42,22 @@ let compile
   fun ?(trace = false) (module Backend) path ->
   if trace then Trace.enable_tracing ();
   Trace.handle_by_logging (fun () ->
-    let result, _ =
-      Context.run
-        (Context.from_bindings Backend.standard_library)
-        (let open Context.Syntax in
-         let contents = In_channel.read_all path in
-         let* toplevels =
-           Parse.run contents |> Result.map_error ~f:(fun e -> `Parser e) |> Context.lift_r
-         in
-         let desugared = List.map toplevels ~f:Term.desugar_toplevel in
-         let resolved, _dependency_graph = Resolve.resolve_program desugared in
-         let* inferred = Checker.infer_toplevel resolved in
-         let* _ = Solve.solve () in
-         let* zonked = Context.traverse ~f:Zonk.zonk_toplevel inferred in
-         let* errors = Context.errors in
-         List.iter errors ~f:(fun e -> Printf.printf "Error: %s\n" (Calyx_error.show e));
-         assert (List.is_empty errors);
+    let contents = In_channel.read_all path in
+    match Parse.run contents with
+    | Error e -> Error [ `Parser e ]
+    | Ok toplevels ->
+      let desugared = List.map toplevels ~f:Term.desugar_toplevel in
+      let resolved, _dependency_graph = Resolve.resolve_program desugared in
+      let result, state =
+        Context.run ~bindings:Backend.standard_library (fun () ->
+          let inferred = Checker.infer_toplevel resolved in
+          Solve.solve ();
+          List.map ~f:Zonk.zonk_toplevel inferred)
+      in
+      (match result, state.Context.errors with
+       | Ok zonked, [] ->
          let ir = Ir.convert zonked in
-         Context.pure @@ Backend.compile ir)
-    in
-    result)
+         Ok (Backend.compile ir)
+       | Ok _, errors -> Error (List.rev errors)
+       | Error errors, _ -> Error (List.rev errors)))
 ;;

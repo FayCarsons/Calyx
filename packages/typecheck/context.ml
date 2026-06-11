@@ -271,8 +271,12 @@ let run
     { meta_gen = 0; errors = []; constraints = []; definitions = Ident.Map.empty }
   in
   let comp =
-    match (under_scope init_scope f) with 
+    match (under_scope init_scope f) with
     | x -> (fun st -> Ok x, st)
+    | exception Fail e ->
+      fun st ->
+        let st = { st with errors = e :: st.errors } in
+        Error st.errors, st
     | effect (Tell_error e), k -> fun st ->
         continue k () { st with errors = e :: st.errors }
     | effect (Tell_constraint c), k -> fun st ->

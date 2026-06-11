@@ -126,5 +126,57 @@ let%test_module "zero-cost representation" =
         List.is_empty state.Context.errors && List.for_all zonked ~f:Testgen.decl_clean
       | Error _ -> false
     ;;
+
+    let%test_unit "zonked record programs contain no encoding artifacts" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make
+           ~count:150
+           ~name:"no-record-encoding-leakage"
+           Testgen.arb_record_spec
+      @@ fun spec ->
+      let result, state =
+        Context.run ~bindings:Testgen.stdlib (fun () ->
+          let inferred = Checker.infer_toplevel (Testgen.record_program spec) in
+          Solve.solve ();
+          List.map ~f:zonk_toplevel inferred)
+      in
+      match result with
+      | Ok zonked ->
+        List.is_empty state.Context.errors && List.for_all zonked ~f:Testgen.decl_clean
+      | Error _ -> false
+    ;;
+
+    (* The two record construction forms — a literal checked at the nominal
+       type and a saturated application of the derived constructor — must
+       elaborate to identical terms, so everything downstream (conversion,
+       IR, layout) sees one construct. *)
+    let%test_unit "record literals and constructor applications elaborate identically" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:150 ~name:"record-agreement" Testgen.arb_record_spec
+      @@ fun spec ->
+      let zonked_const body =
+        let result, state =
+          Context.run ~bindings:Testgen.stdlib (fun () ->
+            let inferred =
+              Checker.infer_toplevel
+                [ Testgen.record_decl_of_spec spec; Testgen.record_const spec body ]
+            in
+            Solve.solve ();
+            List.map ~f:zonk_toplevel inferred)
+        in
+        match result with
+        | Ok zonked when List.is_empty state.Context.errors ->
+          List.find_map zonked ~f:(function
+            | Term.Constant { body; _ } -> Some body
+            | _ -> None)
+        | _ -> None
+      in
+      match
+        ( zonked_const (Testgen.record_literal spec)
+        , zonked_const (Testgen.record_ctor_app spec) )
+      with
+      | Some lit, Some app -> Testgen.term_eq lit app
+      | _ -> false
+    ;;
   end)
 ;;

@@ -14,6 +14,9 @@ type t =
   | `UnknownConstructor of Ident.t
   | `CtorArity of Ident.t * int * int
   | `ConstructorMismatch of Ident.t * Ident.t
+  | `DuplicateField of Ident.t * Ident.t
+  | `CtorNameTaken of Ident.t * Ident.t
+  | `RecordLiteralMismatch of Ident.t * Ident.t list * Ident.t list
   | `Todo
   ]
 [@@deriving sexp]
@@ -58,6 +61,30 @@ let show : t -> string =
       "Constructor '%s' does not belong to datatype '%s'"
       (lookup ctor)
       (lookup datatype)
+  | `CtorNameTaken (ctor, datatype) ->
+    Printf.sprintf
+      "Cannot derive constructor '%s' for record '%s': the name is already defined"
+      (lookup ctor)
+      (lookup datatype)
+  | `DuplicateField (datatype, field) ->
+    Printf.sprintf
+      "Record '%s' declares field '%s' more than once"
+      (lookup datatype)
+      (lookup field)
+  | `RecordLiteralMismatch (datatype, missing, extra) ->
+    let part label = function
+      | [] -> []
+      | fields ->
+        [ Printf.sprintf
+            "%s: %s"
+            label
+            (String.concat ~sep:", " @@ List.map ~f:lookup fields)
+        ]
+    in
+    Printf.sprintf
+      "Record literal does not match '%s'\n%s\n"
+      (lookup datatype)
+      (String.concat ~sep:"\n" (part "missing fields" missing @ part "extra fields" extra))
   | `Todo -> "Unimplemented feature"
 ;;
 

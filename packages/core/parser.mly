@@ -76,7 +76,7 @@ let const_decl :=
     }
 
 let data_decl :=
-  | DATA; ident = IDENT; params = type_param*; WHERE; fields = record_type_fields; {
+  | DATA; ident = IDENT; params = type_param*; WHERE; fields = record_decl_fields; {
     let position = (Pos.pos_of_position  $startpos, Pos.pos_of_position $endpos) in
     RecordDecl { ident; params; fields; position }
   }
@@ -85,6 +85,14 @@ let data_decl :=
     and constructors = Ident.Map.of_alist_exn constructors in
     SumDecl { ident; params; constructors; position }
   }
+  | DATA; ident = IDENT; params = type_param*; {
+    (* No constructors: an uninhabited type. *)
+    let position = (Pos.pos_of_position  $startpos, Pos.pos_of_position $endpos) in
+    SumDecl { ident; params; constructors = Ident.Map.empty; position }
+  }
+
+let record_decl_fields :=
+  | fields = separated_nonempty_list(COMMA, record_type_field); { fields }
 
 let type_param :=
   | LPAREN; x = IDENT; COLON; ty = type_expr; RPAREN; { (x, ty) }

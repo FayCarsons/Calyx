@@ -1,0 +1,6 @@
+data Foo where
+  x : Int,
+  x : Int
+
+def main () -> Int do
+  0

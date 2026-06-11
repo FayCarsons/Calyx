@@ -13,25 +13,14 @@ module Make (W : sig
 
   let tell x = Effect.perform (Tell x)
 
-  let handle (f : unit -> 'a) : 'a * W.t list =
+  let handle : type a. (unit -> a) -> a * W.t list = fun f ->
     let open Effect.Deep in
-    let acc = ref [] in
-    let result =
-      try_with
-        f
-        ()
-        { effc =
-            (fun (type c) (eff : c Effect.t) ->
-              match eff with
-              | Tell x ->
-                Some
-                  (fun (k : (c, _) continuation) ->
-                    acc := x :: !acc;
-                    continue k ())
-              | eff ->
-                Some (fun (k : (c, _) continuation) -> continue k (Effect.perform eff)))
-        }
-    in
-    result, !acc
+    let run : W.t list -> a * W.t list = 
+      match f () with 
+      | x -> fun log -> (x, List.rev log)
+      | effect (Tell s), k -> 
+          fun (log : W.t list) -> continue k () (s :: log)
+    in 
+    run []
   ;;
 end

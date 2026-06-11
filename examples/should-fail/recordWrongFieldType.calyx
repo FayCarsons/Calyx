@@ -1,0 +1,6 @@
+data Foo where
+  x : Int,
+  y : Bool
+
+def main () -> Int do
+  let f : Foo = { x = 1, y = 2 } in f.x

@@ -181,6 +181,17 @@ and quote_neutral (lvl : int) : neutral -> Term.t = function
   | NProj (term, field) -> `Proj (quote_neutral lvl term, field)
 ;;
 
+(* A type headed by a record-kinded nominal constant, if [ty] forces to one. *)
+let nominal_record
+  : Term.value -> (Context.data_info * Context.ctor_info * Ident.t list) option
+  =
+  fun ty ->
+  match Solve.force ty with
+  | `Neutral n ->
+    Option.bind (Solve.spine n) ~f:(fun (head, _) -> Context.lookup_record head)
+  | _ -> None
+;;
+
 let rec infer : Term.t -> Term.value * Term.t =
   fun tm ->
   Context.trace Trace.Infer tm [%here]
@@ -363,7 +374,7 @@ and infer_lit : Term.t Term.literal -> Term.value * Term.t Term.literal = functi
 and infer_proj : Term.t -> Ident.t -> Term.value * Term.t =
   fun term field ->
   let typ, annotated = infer term in
-  match typ with
+  match Solve.force typ with
   | `RecordType row ->
     (match Map.find row.fields field with
      | Some field_type -> field_type, `Proj (annotated, field)
@@ -377,15 +388,55 @@ and infer_proj : Term.t -> Ident.t -> Term.value * Term.t =
         | None ->
           Context.fail
             (`NoField (field, Map.to_alist @@ Map.map ~f:Term.show_value row.fields))))
-  | `Neutral n ->
-    let field_type = `Neutral (NMeta (Context.fresh_meta ())) in
-    let partial : Term.value =
-      let fields : Term.value Ident.Map.t = Ident.Map.singleton field field_type in
-      let tail : Term.value option = Some (`Neutral (NMeta (Context.fresh_meta ()))) in
-      `RecordType ({ fields; tail } : Term.value Term.row)
-    in
-    Context.tell_constraint (Constraint.equals (`Neutral n) partial);
-    field_type, `Proj (annotated, field)
+  | `Neutral n as typ ->
+    (match nominal_record typ with
+     | Some (_, ctor, field_names) ->
+       let spine_args =
+         match Solve.spine n with
+         | Some (_, args) -> args
+         | None -> []
+       in
+       (* Instantiate the ctor type's implicit parameter Pis at the spine
+          args, then walk the explicit field Pis to the requested field.
+          Codomains are applied to the projection of the actual scrutinee —
+          fields are non-dependent for now, so the argument is unused, but
+          this is the honest dependent rule. *)
+       let rec instantiate ty = function
+         | [] -> ty
+         | v :: rest ->
+           (match Solve.force ty with
+            | `Pi (Implicit, _, _, cod) -> instantiate (Context.lift_r (cod v)) rest
+            | other ->
+              Context.fail
+                (`Expected
+                    ("constructor type with implicit parameters", Term.show_value other)))
+       in
+       let scrut_val = eval annotated in
+       let rec walk acc ty = function
+         | [] ->
+           Context.fail
+             (`NoField
+                 (field, List.rev_map acc ~f:(fun (f, dom) -> f, Term.show_value dom)))
+         | name :: rest ->
+           (match Solve.force ty with
+            | `Pi (Explicit, _, dom, cod) ->
+              if Ident.equal name field
+              then dom
+              else walk ((name, dom) :: acc) (Context.lift_r (cod (proj name scrut_val))) rest
+            | other ->
+              Context.fail (`Expected ("constructor field type", Term.show_value other)))
+       in
+       let field_ty = walk [] (instantiate ctor.Context.ctor_type spine_args) field_names in
+       field_ty, `Proj (annotated, field)
+     | None ->
+       let field_type = `Neutral (NMeta (Context.fresh_meta ())) in
+       let partial : Term.value =
+         let fields : Term.value Ident.Map.t = Ident.Map.singleton field field_type in
+         let tail : Term.value option = Some (`Neutral (NMeta (Context.fresh_meta ()))) in
+         `RecordType ({ fields; tail } : Term.value Term.row)
+       in
+       Context.tell_constraint (Constraint.equals (`Neutral n) partial);
+       field_type, `Proj (annotated, field))
   | other -> Context.fail (`Expected ("Record", Term.show_value other))
 
 (* Typing for matches with constructor arms, as the constant-motive
@@ -582,6 +633,25 @@ and check : Term.t -> Term.value -> Term.t =
     Context.tell_constraint (Constraint.equals typ' expected);
     let x = check expression typ' in
     `Ann (x, typ)
+  | `Lit (Record lit_fields), expected when Option.is_some (nominal_record expected) ->
+    (* A record literal at a nominal record type elaborates to the saturated
+       derived-constructor application, fields matched by name. Both surface
+       forms converge on the same elaborated term, so everything downstream
+       (encoding, conversion, IR layout) sees one construct. *)
+    let data, ctor, field_names = Option.value_exn (nominal_record expected) in
+    let declared = Ident.TreeSet.of_list field_names in
+    let given = Ident.TreeSet.of_list (Map.keys lit_fields) in
+    let missing = Set.to_list (Set.diff declared given) in
+    let extra = Set.to_list (Set.diff given declared) in
+    if not (List.is_empty missing && List.is_empty extra)
+    then Context.fail (`RecordLiteralMismatch (data.Context.data_name, missing, extra));
+    let app =
+      List.fold
+        field_names
+        ~init:(`Var ctor.Context.ctor_name : Term.t)
+        ~f:(fun acc field -> `App (acc, Map.find_exn lit_fields field))
+    in
+    check app expected
   | term, `Self (_, closure) ->
     (* Intro (SelfGen): Γ ⊢ t ⇐ T[x := t]  ⟹  Γ ⊢ t ⇐ $x. T.
        The "substitution" is NbE application of the HOAS closure. *)
@@ -608,7 +678,7 @@ let validate_encodings : bool ref =
    Encodings are evaluated only after the type and all constructors are bound
    to neutrals: every recursive reference inside an encoding is then a stuck
    nominal neutral, so nothing diverges at eval or quote time. *)
-let elaborate_sum_decl (decl : Term.t Term.sum_type) (k : unit -> 'a) : 'a =
+let elaborate_sum_decl ?record_fields (decl : Term.t Term.sum_type) (k : unit -> 'a) : 'a =
   let ({ ident = data_name; params; constructors; _ } : Term.t Term.sum_type) = decl in
   let pi ?(plicity = Explicit) ident dom cod : Term.t =
     `Pi { plicity; ident; dom; cod }
@@ -717,6 +787,7 @@ let elaborate_sum_decl (decl : Term.t Term.sum_type) (k : unit -> 'a) : 'a =
            ; kind
            ; ctors = ctor_infos
            ; encoding = eval data_encoding_syntax
+           ; record_fields
            }
          in
          Context.define data_name (Context.Data data_info);
@@ -742,14 +813,11 @@ let infer_toplevel : Term.t Term.declaration list -> Term.t Term.declaration lis
         let typ = quote 0 vty in
         (Function { ident; typ; body; position } : Term.t Term.declaration) :: go rest)
     | Constant { ident; typ; body; position } :: rest ->
-      let typ, value =
-        let vty = eval typ in
-        let body_ast = check body vty in
-        vty, body_ast
-      in
-      let value = eval value in
-      Context.with_binding ident ~typ ~value (fun () ->
-        let typ = quote 0 typ in
+      let vty = eval typ in
+      let body = check body vty in
+      let value = eval body in
+      Context.with_binding ident ~typ:vty ~value (fun () ->
+        let typ = quote 0 vty in
         Constant { ident; typ; body; position } :: go rest)
     | SumDecl decl :: rest ->
       (match Positivity.check decl with
@@ -757,9 +825,33 @@ let infer_toplevel : Term.t Term.declaration list -> Term.t Term.declaration lis
          Context.tell_error e;
          SumDecl decl :: go rest
        | Ok () -> elaborate_sum_decl decl (fun () -> SumDecl decl :: go rest))
-    | (RecordDecl _ as decl) :: rest ->
-      Context.tell_error (`Unsupported "record type declarations");
-      decl :: go rest
+    | (RecordDecl { ident; params; fields; position } as decl) :: rest ->
+      let field_names = List.map fields ~f:fst in
+      let ctor = Term.record_ctor_name ident in
+      (match List.find_a_dup field_names ~compare:Ident.compare with
+       | Some dup ->
+         Context.tell_error (`DuplicateField (ident, dup));
+         decl :: go rest
+       | None ->
+         if Option.is_some (Context.lookup_defn ctor)
+         then Context.tell_error (`CtorNameTaken (ctor, ident));
+         (* A record is a single-constructor datatype: the literal/projection
+            rules and the IR's tag-elided layout key on [record_fields]; the
+            encoding, conversion, and match machinery see an ordinary sum. *)
+         let sum : Term.t Term.sum_type =
+           { ident
+           ; params
+           ; constructors = Ident.Map.singleton ctor (List.map fields ~f:snd)
+           ; position
+           }
+         in
+         (match Positivity.check sum with
+          | Error e ->
+            Context.tell_error e;
+            decl :: go rest
+          | Ok () ->
+            elaborate_sum_decl ~record_fields:field_names sum (fun () ->
+              decl :: go rest)))
     | [] -> []
   in
   go program
@@ -964,6 +1056,159 @@ let%test_module "datatype invariants" =
         let desugared = List.map toplevels ~f:Term.desugar_toplevel in
         let resolved, _ = Resolve.resolve_program desugared in
         clean_run (check_program resolved)
+    ;;
+
+    (* {2 Records} *)
+
+    let%test_unit "record programs typecheck: literals and every projection" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:150 ~name:"record-programs" Testgen.arb_record_spec
+      @@ fun spec -> clean_run (check_program (Testgen.record_program spec))
+    ;;
+
+    let%test_unit "record encodings check against their constructor types" =
+      let saved = !validate_encodings in
+      validate_encodings := true;
+      Exn.protect
+        ~finally:(fun () -> validate_encodings := saved)
+        ~f:(fun () ->
+          QCheck.Test.check_exn
+          @@ QCheck.Test.make
+               ~count:100
+               ~name:"record-encoding-validation"
+               Testgen.arb_record_spec
+          @@ fun spec -> clean_run (check_program [ Testgen.record_decl_of_spec spec ]))
+    ;;
+
+    let has_error errors ~f =
+      match errors with
+      | Ok _, state -> List.exists state.Context.errors ~f
+      | Error errs, _ -> List.exists errs ~f
+    ;;
+
+    let%test_unit "record literals with a missing or extra field are rejected" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make
+           ~count:100
+           ~name:"record-literal-mismatch"
+           Testgen.arb_record_with_index
+      @@ fun (spec, i) ->
+      let full =
+        List.mapi spec.Testgen.r_fields ~f:(fun j f ->
+          Testgen.record_field_name spec j, Testgen.record_field_arg f)
+      in
+      let literal_of alist : Term.t = `Lit (Record (Ident.Map.of_alist_exn alist)) in
+      let rejected body =
+        has_error
+          (check_program
+             [ Testgen.record_decl_of_spec spec; Testgen.record_const spec body ])
+          ~f:(function
+            | `RecordLiteralMismatch _ -> true
+            | _ -> false)
+      in
+      rejected (literal_of (List.filteri full ~f:(fun j _ -> j <> i)))
+      && rejected
+           (literal_of ((Intern.intern "rfBogus", (`Lit (Int 0) : Term.t)) :: full))
+    ;;
+
+    let%test_unit "projecting an unknown field is rejected" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:100 ~name:"record-bad-proj" Testgen.arb_record_spec
+      @@ fun spec ->
+      let x = Intern.intern "propRecScrut" in
+      let bogus : Term.t Term.declaration =
+        Function
+          { ident = Intern.intern "propBadProj"
+          ; typ =
+              `Pi
+                { plicity = Explicit
+                ; ident = x
+                ; dom = Testgen.record_inst_type spec
+                ; cod = `Var Testgen.int_name
+                }
+          ; body = `Lam (Explicit, x, `Proj (`Var x, Intern.intern "rfBogus"))
+          ; position = Testgen.no_pos
+          }
+      in
+      has_error
+        (check_program [ Testgen.record_decl_of_spec spec; bogus ])
+        ~f:(function
+          | `NoField _ -> true
+          | _ -> false)
+    ;;
+
+    let%test "a negatively recursive record is rejected by positivity" =
+      let bad : Term.t Term.declaration =
+        RecordDecl
+          { ident = Testgen.record_name
+          ; params = []
+          ; fields =
+              [ ( Intern.intern "rf0"
+                , `Pi
+                    { plicity = Explicit
+                    ; ident = Intern.underscore
+                    ; dom = `Var Testgen.record_name
+                    ; cod = `Var Testgen.int_name
+                    } )
+              ]
+          ; position = Testgen.no_pos
+          }
+      in
+      has_error (check_program [ bad ]) ~f:(function
+        | `Positivity _ -> true
+        | _ -> false)
+    ;;
+
+    let%test "record fields keep declaration order behind a single constructor" =
+      let spec = Testgen.{ r_params = 1; r_fields = [ FInt; FBool; FParam 0 ] } in
+      (* Declaration order rf2, rf1, rf0: reverse-alphabetical by design. *)
+      match check_program (Testgen.record_program spec) with
+      | Ok _, state ->
+        List.is_empty state.Context.errors
+        && (match Map.find state.Context.definitions Testgen.record_name with
+            | Some (Context.Data info) ->
+              Option.equal
+                (List.equal Ident.equal)
+                info.Context.record_fields
+                (Some (List.map ~f:Intern.intern [ "rf2"; "rf1"; "rf0" ]))
+              && (match info.Context.ctors with
+                  | [ ctor ] ->
+                    Ident.equal ctor.Context.ctor_name Testgen.record_ctor
+                    && ctor.Context.arity = 3
+                  | _ -> false)
+            | _ -> false)
+      | Error _, _ -> false
+    ;;
+
+    let%test "uninhabited datatypes elaborate to the bare self elimination" =
+      let void = Intern.intern "PropVoid" in
+      let sum : Term.t Term.sum_type =
+        { ident = void
+        ; params = []
+        ; constructors = Ident.Map.empty
+        ; position = Testgen.no_pos
+        }
+      in
+      Context.run ~bindings:Testgen.stdlib (fun () ->
+        elaborate_sum_decl sum (fun () ->
+          let data = Option.value_exn (Context.lookup_data void) in
+          List.is_empty data.Context.ctors
+          &&
+          match quote 0 data.Context.encoding with
+          | `Self
+              ( self_id
+              , `Pi
+                  { plicity = Implicit
+                  ; ident = motive
+                  ; dom = `Pi { dom = `Var d; cod = `Type; _ }
+                  ; cod = `App (`Var p, `Var s)
+                  ; _
+                  } ) ->
+            Ident.equal d void && Ident.equal p motive && Ident.equal s self_id
+          | _ -> false))
+      |> function
+      | Ok b, state -> b && List.is_empty state.Context.errors
+      | Error _, _ -> false
     ;;
   end)
 ;;

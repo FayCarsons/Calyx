@@ -1,0 +1,7 @@
+data Void
+
+def absurdish (v : Void) -> Int do
+  0
+
+def main () -> Int do
+  7

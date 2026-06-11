@@ -260,7 +260,7 @@ let declaration ?(opts = Options.default) : Term.cst Term.declaration -> documen
     in
     let field_doc (fname, fty) = ident fname ^^ colon ^^ cst ~opts fty in
     let fields_doc =
-      separate (comma_sep ^^ hardline) (List.map ~f:field_doc (Map.to_alist fields))
+      separate (comma_sep ^^ hardline) (List.map ~f:field_doc fields)
     in
     group
       (string "data "

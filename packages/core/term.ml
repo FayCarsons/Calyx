@@ -292,11 +292,18 @@ type 'a declaration =
   | RecordDecl of
       { ident : Ident.t
       ; params : (Ident.t * 'a) list
-      ; fields : 'a Ident.Map.t
+      ; fields : (Ident.t * 'a) list (* in source order; order is the ctor's field order *)
       ; position : Pos.pos * Pos.pos
       }
   | SumDecl of 'a sum_type
 [@@deriving show, sexp]
+
+(* The derived constructor of a record declaration. Surface naming lives here
+   and nowhere else: the planned syntax overhaul may change the scheme, and
+   the datatype machinery is keyed on elaborated forms only. *)
+let record_ctor_name : Ident.t -> Ident.t =
+  fun data -> Ident.Intern.intern ("Mk" ^ Ident.Intern.lookup data)
+;;
 
 let desugar_toplevel = function
   | Function { ident; typ; body; position } ->
@@ -309,7 +316,7 @@ let desugar_toplevel = function
     Constant { ident; typ; body; position }
   | RecordDecl { ident; params; fields; position } ->
     let params = List.map params ~f:(fun (x, ty) -> x, desugar ty)
-    and fields = Map.map fields ~f:desugar in
+    and fields = List.map fields ~f:(fun (x, ty) -> x, desugar ty) in
     RecordDecl { ident; params; fields; position }
   | SumDecl { ident; params; constructors; position } ->
     let params = List.map params ~f:(fun (x, ty) -> x, desugar ty)

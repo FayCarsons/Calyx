@@ -1,0 +1,5 @@
+data Foo where
+  x : Int
+
+def main () -> Int do
+  let f : Foo = { x = 1 } in f.z

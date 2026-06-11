@@ -1,0 +1,4 @@
+data Void
+
+def main () -> Int do
+  let v : Void = MkVoid in 0

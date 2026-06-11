@@ -1,0 +1,12 @@
+data Pair (a : Type) (b : Type) where
+  fst : a,
+  snd : b
+
+def swap {a} {b} (p : Pair a b) -> Pair b a do
+  { fst = p.snd, snd = p.fst }
+
+def main () -> Int do
+  let p : Pair Int Bool = { fst = 41, snd = True } in
+  let q : Pair Bool Int = swap p in
+  let mk : Pair Int Int = MkPair 1 2 in
+  if q.fst then q.snd + mk.fst + mk.snd else 0

@@ -35,8 +35,10 @@ module.exports = grammar({
       'data',
       field('name', $.type_identifier),
       repeat($._data_param),
-      'where',
-      choice($.record_fields, repeat1($.constructor)),
+      optional(seq(
+        'where',
+        choice($.record_fields, repeat1($.constructor)),
+      )),
     ),
 
     _data_param: $ => choice(

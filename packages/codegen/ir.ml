@@ -4,28 +4,21 @@ open Core
   But eventually we want to an "ANF" IR a la [Compiling without Continuations](https://simon.peytonjones.org/assets/pdfs/compiling-without-continuations.pdf)
 *)
 module Fresh = struct
-  type _ Effect.t += Get : string -> string Effect.t
+  open Effect.Deep
+
+  type _ Effect.t += Get : string -> string Effect.t 
 
   let get pref = Effect.perform (Get pref)
 
-  let handle : (unit -> 'a) -> 'a =
+  let handle : type a. (unit -> a) -> a =
     fun f ->
-    let open Effect.Deep in
-    let counter = ref (-1) in
-    try_with
-      f
-      ()
-      { effc =
-          (fun (type c) (eff : c Effect.t) ->
-            match eff with
-            | Get prefix ->
-              Some
-                (fun (k : (c, _) continuation) ->
-                  incr counter;
-                  continue k (prefix ^ string_of_int !counter))
-            | eff ->
-              Some (fun (k : (c, _) continuation) -> continue k (Effect.perform eff)))
-      }
+    let run : int -> a = 
+      match f () with 
+      | x -> Fun.const x 
+      | effect (Get prefix), k -> fun counter ->
+          continue k (prefix ^ string_of_int counter) (succ counter)
+    in 
+    run 0
   ;;
 end
 
@@ -84,7 +77,7 @@ type declaration =
   | RecordType of
       { ident : Ident.t
       ; params : (Ident.t * ty) list
-      ; fields : ty Ident.Map.t
+      ; fields : (Ident.t * ty) list (* declaration order = constructor arg order *)
       ; position : Pos.pos * Pos.pos
       }
   | SumType of
@@ -193,8 +186,7 @@ module PrettyIR = struct
         |> String.concat ~sep:" "
       in
       let fields =
-        Map.to_alist ~key_order:`Increasing fields
-        |> List.map ~f:(fun (ident, ty) ->
+        List.map fields ~f:(fun (ident, ty) ->
           Printf.sprintf "%s : %s" (Ident.Intern.lookup ident) (ir_ty ty))
         |> String.concat ~sep:"\n"
       in
@@ -239,6 +231,23 @@ module CtorTags = struct
 
   let handle (ctor_tags : (int * int) Ident.Map.t) (f : unit -> 'a) : 'a =
     let open Effect.Deep in
+    try f () with 
+    | effect (Lookup name), k -> 
+        continue k (Map.find ctor_tags name)
+  ;;
+end
+
+(* Record-constructor registry - maps derived record ctor names to their
+   field names in declaration order. Records get tag elision: a saturated
+   record-ctor spine lowers to a plain field-named object literal, never a
+   tagged [Ctor]. *)
+module RecordCtors = struct
+  type _ Effect.t += Lookup : Ident.t -> Ident.t list option Effect.t
+
+  let lookup name = Effect.perform (Lookup name)
+
+  let handle (record_ctors : Ident.t list Ident.Map.t) (f : unit -> 'a) : 'a =
+    let open Effect.Deep in
     try_with
       f
       ()
@@ -246,7 +255,8 @@ module CtorTags = struct
           (fun (type c) (eff : c Effect.t) ->
             match eff with
             | Lookup name ->
-              Some (fun (k : (c, _) continuation) -> continue k (Map.find ctor_tags name))
+              Some
+                (fun (k : (c, _) continuation) -> continue k (Map.find record_ctors name))
             | eff ->
               Some (fun (k : (c, _) continuation) -> continue k (Effect.perform eff)))
       }
@@ -272,21 +282,38 @@ let rec convert_expr : Term.t -> t = function
         (* Skip type-level arguments (implicit type params) *)
         if is_type_arg x' then go acc f' else go (convert_expr x' :: acc) f'
       | `Var ident ->
-        (match CtorTags.lookup ident with
-         | Some (tag, arity) when List.length acc = arity -> Ctor (tag, ident, acc)
+        (match RecordCtors.lookup ident with
+         | Some field_names when List.length acc = List.length field_names ->
+           Lit (Record (Ident.Map.of_alist_exn (List.zip_exn field_names acc)))
          | Some _ when List.is_empty acc ->
-           (* Bare reference to a non-nullary constructor: a first-class
-              function value in the backend. *)
+           (* Bare reference to a record constructor: a first-class function
+              value, backed by the function the backend emits for the
+              record declaration. *)
            Var ident
-         | Some (_, arity) ->
+         | Some field_names ->
            failwith
            @@ Printf.sprintf
-                "Partial application of constructor '%s' (%d of %d arguments) is not yet \
-                 supported"
+                "Partial application of record constructor '%s' (%d of %d arguments) is \
+                 not yet supported"
                 (Ident.Intern.lookup ident)
                 (List.length acc)
-                arity
-         | None -> App (ident, acc))
+                (List.length field_names)
+         | None ->
+           (match CtorTags.lookup ident with
+            | Some (tag, arity) when List.length acc = arity -> Ctor (tag, ident, acc)
+            | Some _ when List.is_empty acc ->
+              (* Bare reference to a non-nullary constructor: a first-class
+                 function value in the backend. *)
+              Var ident
+            | Some (_, arity) ->
+              failwith
+              @@ Printf.sprintf
+                   "Partial application of constructor '%s' (%d of %d arguments) is not \
+                    yet supported"
+                   (Ident.Intern.lookup ident)
+                   (List.length acc)
+                   arity
+            | None -> App (ident, acc)))
       | `Ann (x, _) | `Pos (_, x) -> go acc x
       | other ->
         failwith
@@ -345,6 +372,14 @@ and convert_pattern : Term.t Term.pattern -> pattern = function
   | Term.PVar x -> PVar x
   | Term.PWild -> PWild
   | Term.PCtor (name, args) ->
+    if Option.is_some (RecordCtors.lookup name)
+    then
+      (* Tag-elided record objects have no [_tag] and named (not positional)
+         fields; the sum-ctor pattern path would silently bind [undefined]. *)
+      failwith
+      @@ Printf.sprintf
+           "Matching on record constructor '%s' is not yet supported; use projection"
+           (Ident.Intern.lookup name);
     let tag = CtorTags.lookup name |> Option.value_map ~default:0 ~f:fst in
     PCtor (tag, name, List.map ~f:convert_pattern args)
   | Term.PLit lit -> PLit (convert_literal lit)
@@ -456,7 +491,7 @@ let convert : Term.t Term.declaration list -> declaration list =
       Constant { ident; ty; value; position }
     | Term.RecordDecl { ident; params; fields; position } ->
       let params = List.map params ~f:(fun (x, ty) -> x, convert_type ty)
-      and fields = Map.map ~f:convert_type fields in
+      and fields = List.map fields ~f:(fun (x, ty) -> x, convert_type ty) in
       RecordType { ident; params; fields; position }
     | Term.SumDecl { ident; params; constructors; position } ->
       let params = List.map params ~f:(fun (x, ty) -> x, convert_type ty) in
@@ -486,10 +521,18 @@ let convert : Term.t Term.declaration list -> declaration list =
           Map.set acc ~key:ctor_name ~data:(idx, List.length fields))
       | _ -> acc)
   in
+  let record_ctors =
+    List.fold sorted_declarations ~init:Ident.Map.empty ~f:(fun acc decl ->
+      match decl with
+      | Term.RecordDecl { ident; fields; _ } ->
+        Map.set acc ~key:(Term.record_ctor_name ident) ~data:(List.map fields ~f:fst)
+      | _ -> acc)
+  in
   let x, xs =
     Lifted.handle (fun () ->
       Fresh.handle (fun () ->
-        CtorTags.handle ctor_tags (fun () -> List.map ~f:go sorted_declarations)))
+        CtorTags.handle ctor_tags (fun () ->
+          RecordCtors.handle record_ctors (fun () -> List.map ~f:go sorted_declarations))))
   in
   List.append x xs
 ;;
@@ -583,6 +626,40 @@ let%test_module "tag coherence" =
                 | Some n -> n = fields))
         in
         (not (List.is_empty occurrences)) && store_coherent && occurrences_coherent
+    ;;
+
+    (* Record layout: a saturated record-constructor spine never becomes a
+       tagged [Ctor] — it lowers to a field-named [Record] literal carrying
+       exactly the declared fields. *)
+    let%test_unit "record constants lower to field-named literals, never Ctor" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:100 ~name:"record-layout" Testgen.arb_record_spec
+      @@ fun spec ->
+      let result, state =
+        Context.run ~bindings:Testgen.stdlib (fun () ->
+          let inferred = Checker.infer_toplevel (Testgen.record_program spec) in
+          Solve.solve ();
+          List.map ~f:Zonk.zonk_toplevel inferred)
+      in
+      match result with
+      | Error _ -> false
+      | Ok zonked ->
+        List.is_empty state.Context.errors
+        &&
+        let ir = convert zonked in
+        let no_ctors = List.is_empty (List.fold ir ~init:[] ~f:collect_decl) in
+        let field_names =
+          List.mapi spec.Testgen.r_fields ~f:(fun i _ -> Testgen.record_field_name spec i)
+          |> List.sort ~compare:Ident.compare
+        in
+        let literal_fields_exact =
+          List.find_map ir ~f:(function
+            | Constant { value = Lit (Record fields); _ } ->
+              Some (List.equal Ident.equal (Map.keys fields) field_names)
+            | _ -> None)
+          |> Option.value ~default:false
+        in
+        no_ctors && literal_fields_exact
     ;;
   end)
 ;;

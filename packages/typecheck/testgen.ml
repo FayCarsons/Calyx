@@ -132,6 +132,115 @@ let program spec depth : Term.t Term.declaration list =
   [ SumDecl (adt_of_spec spec); constant_of spec depth; consume_fn spec ]
 ;;
 
+(* {1 Record specs}
+
+   Random nominal-record specifications and program builders (milestone 2).
+   Fields exclude [FRec]: a recursive record is positivity-clean but
+   uninhabited, so no value-level program could exercise it. *)
+
+type record_spec =
+  { r_params : int
+  ; r_fields : field_spec list (* nonempty *)
+  }
+[@@deriving sexp]
+
+let record_name = Intern.intern "PropR"
+let record_ctor = Term.record_ctor_name record_name
+
+(* Reverse-indexed so declaration order differs from alphabetical order;
+   anything that silently alphabetizes the field telescope fails the
+   agreement and projection properties. *)
+let record_field_name spec i =
+  Intern.intern (Printf.sprintf "rf%d" (List.length spec.r_fields - 1 - i))
+;;
+
+let record_params spec : (Ident.t * Term.t) list =
+  List.init spec.r_params ~f:(fun i -> param_name i, (`Type : Term.t))
+;;
+
+let record_field_syntax spec : field_spec -> Term.t = function
+  | FBool -> `Var bool_name
+  | FParam i when spec.r_params > 0 -> `Var (param_name (i mod spec.r_params))
+  | FInt | FParam _ | FRec -> `Var int_name
+;;
+
+let record_decl_of_spec spec : Term.t Term.declaration =
+  RecordDecl
+    { ident = record_name
+    ; params = record_params spec
+    ; fields =
+        List.mapi spec.r_fields ~f:(fun i f ->
+          record_field_name spec i, record_field_syntax spec f)
+    ; position = no_pos
+    }
+;;
+
+(** [PropR] with every parameter instantiated to [Int]. *)
+let record_inst_type spec : Term.t =
+  app_spine
+    (`Var record_name)
+    (List.init spec.r_params ~f:(fun _ -> (`Var int_name : Term.t)))
+;;
+
+let record_field_arg : field_spec -> Term.t = function
+  | FInt -> `Lit (Int 42)
+  | FBool -> `Lit (Bool true)
+  | FParam _ | FRec -> `Lit (Int 7)
+;;
+
+(** Field type after instantiating every parameter to [Int]. *)
+let record_field_inst_type : field_spec -> Term.t = function
+  | FBool -> `Var bool_name
+  | FInt | FParam _ | FRec -> `Var int_name
+;;
+
+let record_literal spec : Term.t =
+  `Lit
+    (Record
+       (Ident.Map.of_alist_exn
+          (List.mapi spec.r_fields ~f:(fun i f ->
+             record_field_name spec i, record_field_arg f))))
+;;
+
+let record_ctor_app spec : Term.t =
+  app_spine (`Var record_ctor) (List.map spec.r_fields ~f:record_field_arg)
+;;
+
+let record_const spec (body : Term.t) : Term.t Term.declaration =
+  Constant
+    { ident = Intern.intern "propRec"
+    ; typ = record_inst_type spec
+    ; body
+    ; position = no_pos
+    }
+;;
+
+(** A function projecting field [i] from a [PropR Int ...], with the correct
+    monomorphic return type. *)
+let record_proj_fn spec i : Term.t Term.declaration =
+  let x = Intern.intern "propRecScrut" in
+  let typ : Term.t =
+    `Pi
+      { plicity = Explicit
+      ; ident = x
+      ; dom = record_inst_type spec
+      ; cod = record_field_inst_type (List.nth_exn spec.r_fields i)
+      }
+  in
+  Function
+    { ident = Intern.intern (Printf.sprintf "propProj%d" i)
+    ; typ
+    ; body = `Lam (Explicit, x, `Proj (`Var x, record_field_name spec i))
+    ; position = no_pos
+    }
+;;
+
+(** Full record program: declaration, a literal constant, every projection. *)
+let record_program spec : Term.t Term.declaration list =
+  (record_decl_of_spec spec :: record_const spec (record_literal spec)
+   :: List.mapi spec.r_fields ~f:(fun i _ -> record_proj_fn spec i))
+;;
+
 (* {1 Leak detection}
 
    Encodings must never escape conversion: elaborated/zonked terms may not
@@ -224,6 +333,33 @@ let arb_adt_with_depth =
     gen_adt_spec >>= fun spec -> int_bound 3 >>= fun d -> return (spec, d)
   in
   QCheck.make ~print:(fun (s, d) -> Printf.sprintf "%s, depth %d" (print_spec s) d) gen
+;;
+
+let gen_record_spec : record_spec QCheck.Gen.t =
+  let open QCheck.Gen in
+  int_range 0 2
+  >>= fun r_params ->
+  let param_fields =
+    if r_params > 0 then [ map (fun i -> FParam i) (int_bound (r_params - 1)) ] else []
+  in
+  let field = oneof ([ return FInt; return FBool ] @ param_fields) in
+  list_size (int_range 1 4) field >>= fun r_fields -> return { r_params; r_fields }
+;;
+
+let print_record_spec s = Sexp.to_string_hum (sexp_of_record_spec s)
+let arb_record_spec = QCheck.make ~print:print_record_spec gen_record_spec
+
+(** Record spec plus a valid field index. *)
+let arb_record_with_index =
+  let gen =
+    let open QCheck.Gen in
+    gen_record_spec
+    >>= fun spec ->
+    int_bound (List.length spec.r_fields - 1) >>= fun i -> return (spec, i)
+  in
+  QCheck.make
+    ~print:(fun (s, i) -> Printf.sprintf "%s, field %d" (print_record_spec s) i)
+    gen
 ;;
 
 (** Spec with at least two constructors, plus a proper nonempty subset mask. *)

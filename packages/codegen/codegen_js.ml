@@ -330,7 +330,17 @@ module Javascript : Codegen.M = struct
       Printf.sprintf "const %s = (%s) => {\n  %s\n}" (name ident) args_str body
     | Constant { ident; value; _ } ->
       Printf.sprintf "const %s = %s;\n" (name ident) (compile_expr value)
-    | RecordType _ -> ""
+    | RecordType { ident; fields; _ } ->
+      (* Tag elision: records are plain field-named objects, no [_tag]. This
+         constructor function backs first-class uses of the derived ctor;
+         saturated applications are inlined as object literals by the IR. *)
+      let ctor = name (Term.record_ctor_name ident) in
+      let params = List.map fields ~f:(fun (field, _) -> name field) in
+      Printf.sprintf
+        "const %s = (%s) => ({ %s });"
+        ctor
+        (String.concat ~sep:", " params)
+        (String.concat ~sep:", " @@ List.map params ~f:(fun p -> p ^ ": " ^ p))
     | SumType { ident = _; constructors; _ } ->
       (* Generate constructor functions that return tagged objects with integer tags *)
       (* Constructors are already sorted alphabetically, so index = tag *)
@@ -396,6 +406,27 @@ let%test_module "js emission invariants" =
       match compile_program (Testgen.program spec 2) with
       | None -> false
       | Some js -> String.is_substring js ~substring:"._tag ==="
+    ;;
+
+    (* Tag elision: record programs are plain field-named objects — no [_tag]
+       anywhere, no encoding binder, the derived constructor emitted as a
+       first-class function, every field present as an object key. *)
+    let%test_unit "record programs emit tag-elided field-named objects" =
+      QCheck.Test.check_exn
+      @@ QCheck.Test.make ~count:100 ~name:"js-record-clean" Testgen.arb_record_spec
+      @@ fun spec ->
+      match compile_program (Testgen.record_program spec) with
+      | None -> false
+      | Some js ->
+        (not (String.contains js '$'))
+        && (not (String.is_substring js ~substring:"_tag"))
+        && String.is_substring
+             js
+             ~substring:(Ident.Intern.lookup Testgen.record_ctor)
+        && List.for_alli spec.Testgen.r_fields ~f:(fun i _ ->
+          String.is_substring
+            js
+            ~substring:(Ident.Intern.lookup (Testgen.record_field_name spec i) ^ ":"))
     ;;
   end)
 ;;

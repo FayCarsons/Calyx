@@ -1,0 +1,5 @@
+data Bad where
+  f : Bad -> Int
+
+def main () -> Int do
+  0

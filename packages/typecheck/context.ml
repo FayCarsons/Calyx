@@ -42,6 +42,9 @@ type data_info =
   ; kind : Term.value
   ; ctors : ctor_info list (* in tag order *)
   ; encoding : Term.value
+  ; record_fields : Ident.t list option
+    (* [Some names]: a record declaration; the single ctor's field i is named
+       [List.nth names i]. [None]: an ordinary sum. *)
   }
 
 type definition =
@@ -109,19 +112,12 @@ let is_bound : Ident.t -> bool = fun ident -> Option.is_some (lookup ident)
 
 (** Run [f] with [sc] as the current scope. The handler is deep ([try_with]),
     so it persists for every [Scope] perform within [f] and vanishes when [f]
-    returns; all other effects are declined ([None]) and forward outward. *)
+    returns. *)
 let under_scope : type a. scope -> (unit -> a) -> a =
   fun sc f ->
   let open Effect.Deep in
-  try_with
-    f
-    ()
-    { effc =
-        (fun (type b) (eff : b Effect.t) ->
-          match eff with
-          | Scope -> Some (fun (k : (b, _) continuation) -> continue k sc)
-          | _ -> None)
-    }
+  try f () with 
+  | effect Scope, k -> continue k sc
 ;;
 
 let with_scope : f:(scope -> scope) -> (unit -> 'a) -> 'a =
@@ -221,6 +217,14 @@ let lookup_ctor : Ident.t -> ctor_info option =
   | _ -> None
 ;;
 
+let lookup_record : Ident.t -> (data_info * ctor_info * Ident.t list) option =
+  fun ident ->
+  match lookup_data ident with
+  | Some ({ record_fields = Some names; ctors = [ ctor ]; _ } as info) ->
+    Some (info, ctor, names)
+  | _ -> None
+;;
+
 (* {1 Tracing} *)
 
 let trace : type i o. (i, o) Trace.stage -> i -> Lexing.position -> (unit -> o) -> o =
@@ -267,47 +271,24 @@ let run
     { meta_gen = 0; errors = []; constraints = []; definitions = Ident.Map.empty }
   in
   let comp =
-    match_with
-      (fun () -> under_scope init_scope f)
-      ()
-      { retc = (fun x st -> Ok x, st)
-      ; exnc =
-          (function
-            | Fail e ->
-              fun st ->
-                let st = { st with errors = e :: st.errors } in
-                Error st.errors, st
-            | exn -> raise exn)
-      ; effc =
-          (fun (type b) (eff : b Effect.t) ->
-            match eff with
-            | Tell_error e ->
-              Some
-                (fun (k : (b, _) continuation) st ->
-                  continue k () { st with errors = e :: st.errors })
-            | Tell_constraint c ->
-              Some
-                (fun k st -> continue k () { st with constraints = c :: st.constraints })
-            | Take_constraints ->
-              Some (fun k st -> continue k st.constraints { st with constraints = [] })
-            | Has_constraints ->
-              Some (fun k st -> continue k (not (List.is_empty st.constraints)) st)
-            | Fresh_meta lvl ->
-              Some
-                (fun k st ->
-                  let meta = Term.Meta.make ~id:st.meta_gen ~level:lvl () in
-                  continue k meta { st with meta_gen = succ st.meta_gen })
-            | Define (ident, defn) ->
-              Some
-                (fun k st ->
-                  continue
-                    k
-                    ()
-                    { st with definitions = Map.set st.definitions ~key:ident ~data:defn })
-            | Lookup_defn ident ->
-              Some (fun k st -> continue k (Map.find st.definitions ident) st)
-            | _ -> None)
-      }
+    match (under_scope init_scope f) with 
+    | x -> (fun st -> Ok x, st)
+    | effect (Tell_error e), k -> fun st ->
+        continue k () { st with errors = e :: st.errors }
+    | effect (Tell_constraint c), k -> fun st ->
+        continue k () { st with constraints = c :: st.constraints }
+    | effect Take_constraints, k -> fun st -> 
+        continue k st.constraints { st with constraints = [] }
+    | effect Has_constraints, k -> fun st -> 
+        continue k (not @@ List.is_empty st.constraints) st
+    | effect (Fresh_meta level), k -> fun st -> 
+        let meta = Term.Meta.make ~id:st.meta_gen ~level () in 
+        continue k meta { st with meta_gen = succ st.meta_gen }
+    | effect (Define (ident, defn)), k ->  fun st -> 
+        continue k () { st with definitions = Map.set st.definitions ~key:ident ~data:defn }
+    | effect (Lookup_defn ident),k -> fun st -> 
+      continue k (Map.find st.definitions ident) st
+
   in
   comp init_state
 ;;

@@ -50,6 +50,7 @@ and literal =
   | UInt of int
   | Float of float
   | Bool of bool
+  | String of string
   | Record of t Ident.Map.t
 [@@deriving show, sexp]
 
@@ -127,6 +128,7 @@ module PrettyIR = struct
     | Int n | UInt n -> string_of_int n
     | Float x -> string_of_float x
     | Bool b -> string_of_bool b
+    | String s -> sprintf "\"%s\"" s
     | Record fields ->
       Map.to_alist ~key_order:`Increasing fields
       |> List.map ~f:(fun (ident, value) ->
@@ -366,6 +368,7 @@ and convert_literal : Term.t Term.literal -> literal = function
   | Term.UInt n -> UInt n
   | Term.Float x -> Float x
   | Term.Bool b -> Bool b
+  | Term.String s -> String s
   | Term.Record fields -> Record (Map.map ~f:convert_expr fields)
 
 and convert_pattern : Term.t Term.pattern -> pattern = function

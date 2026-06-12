@@ -17,6 +17,7 @@ and 'a literal =
   | Int of int
   | UInt of int
   | Float of float
+  | String of string
   | Bool of bool
   | Record of 'a Ident.Map.t
 [@@deriving show, sexp]
@@ -48,6 +49,7 @@ let over_literal (tf : 'a -> 'b) : 'a literal -> 'b literal = function
   | UInt n -> UInt n
   | Float x -> Float x
   | Bool b -> Bool b
+  | String s -> String s
 ;;
 
 let rec over_pattern (tf : 'a -> 'b) : 'a pattern -> 'b pattern = function
@@ -206,76 +208,6 @@ let rec desugar : cst -> t = function
   | #term_binders as binder -> (map_term_binders desugar binder :> t)
 ;;
 
-(* Free variable computation - polymorphic helpers over term types *)
-
-module FreeVars = struct
-  module S = Ident.TreeSet
-
-  let of_literal (go : 'a -> S.t) : 'a literal -> S.t = function
-    | Record fields -> Map.data fields |> List.map ~f:go |> S.union_list
-    | Int _ | UInt _ | Float _ | Bool _ -> S.empty
-  ;;
-
-  let rec of_pattern : 'a pattern -> S.t = function
-    | PVar x -> S.singleton x
-    | PWild -> S.empty
-    | PCtor (_, pats) -> List.map pats ~f:of_pattern |> S.union_list
-    | PLit _ -> S.empty
-    | PRec fields -> List.map fields ~f:(Fun.compose of_pattern snd) |> S.union_list
-  ;;
-
-  let of_base (go : 'a -> S.t) : 'a base -> S.t = function
-    | `Var ident -> S.singleton ident
-    | `App (f, x) -> Set.union (go f) (go x)
-    | `Infix { left; op; right } -> S.union_list [ go left; go op; go right ]
-    | `Ann (x, t) -> Set.union (go x) (go t)
-    | `Lit lit -> of_literal go lit
-    | `Proj (tm, _) -> go tm
-    | `Match (scrut, arms) ->
-      let arm_free (pat, body) = Set.diff (go body) (of_pattern pat) in
-      Set.union (go scrut) (List.map arms ~f:arm_free |> S.union_list)
-    | `Type | `Err _ -> S.empty
-  ;;
-
-  let of_binders (go : 'a -> S.t) : 'a term_binders -> S.t = function
-    | `Lam (_, x, body) -> Set.remove (go body) x
-    | `Pi { ident; dom; cod; _ } -> Set.union (go dom) (Set.remove (go cod) ident)
-    | `Let (x, typ, value, body) ->
-      S.union_list
-        [ Option.value_map typ ~default:S.empty ~f:go; go value; Set.remove (go body) x ]
-  ;;
-
-  let rec of_cst : cst -> S.t = function
-    | `Pos (_, t) -> of_cst t
-    | `If (cond, t, f) -> S.union_list [ of_cst cond; of_cst t; of_cst f ]
-    | `RecordType { fields; tail } ->
-      let field_vars = Map.data fields |> List.map ~f:of_cst |> S.union_list in
-      let tail_var =
-        match tail with
-        | ExplicitTail ident -> S.singleton ident
-        | ImplicitTail | TailClosed -> S.empty
-      in
-      Set.union field_vars tail_var
-    | #base as b -> of_base of_cst b
-    | #term_binders as binder -> of_binders of_cst binder
-  ;;
-
-  let rec of_ast : t -> S.t = function
-    | `Pos (_, t) -> of_ast t
-    | `Meta _ -> S.empty
-    | `Self (x, body) -> Set.remove (of_ast body) x
-    | `RecordType { fields; tail } ->
-      let field_vars = Map.data fields |> List.map ~f:of_ast |> S.union_list in
-      let tail_var = Option.value_map tail ~default:S.empty ~f:of_ast in
-      Set.union field_vars tail_var
-    | #base as b -> of_base of_ast b
-    | #term_binders as binder -> of_binders of_ast binder
-  ;;
-end
-
-(* Convenience wrapper returning list *)
-let free : cst -> Ident.t list = fun term -> Set.to_list (FreeVars.of_cst term)
-
 type 'a declaration =
   | Function of
       { ident : Ident.t
@@ -292,7 +224,8 @@ type 'a declaration =
   | RecordDecl of
       { ident : Ident.t
       ; params : (Ident.t * 'a) list
-      ; fields : (Ident.t * 'a) list (* in source order; order is the ctor's field order *)
+      ; fields :
+          (Ident.t * 'a) list (* in source order; order is the ctor's field order *)
       ; position : Pos.pos * Pos.pos
       }
   | SumDecl of 'a sum_type

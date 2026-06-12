@@ -229,10 +229,10 @@ let lookup_record : Ident.t -> (data_info * ctor_info * Ident.t list) option =
 
 let trace : type i o. (i, o) Trace.stage -> i -> Lexing.position -> (unit -> o) -> o =
   fun stage focus here f ->
-  let sc = scope () in
+  let scope' = scope () in
   let context =
     lazy
-      (Map.to_alist sc.bindings
+      (Map.to_alist scope'.bindings
        |> List.map ~f:(function
          | ident, Untyped tm -> Ident.Intern.lookup ident, tm, None
          | ident, Typed (tm, typ) -> Ident.Intern.lookup ident, tm, Some typ))
@@ -240,7 +240,7 @@ let trace : type i o. (i, o) Trace.stage -> i -> Lexing.position -> (unit -> o) 
   let source_location =
     Trace.{ file = here.Lexing.pos_fname; line = here.Lexing.pos_lnum }
   in
-  let judgement = Trace.{ stage; focus; context; location = sc.pos; source_location } in
+  let judgement = Trace.{ stage; focus; context; location = scope'.pos; source_location } in
   match Trace.enter judgement with
   | Abort -> raise Trace.Trace_aborted
   | _ ->

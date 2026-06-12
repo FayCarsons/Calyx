@@ -235,6 +235,7 @@ let expr_atom :=
   | i = INT; { `Lit (Int i) }
   | f = FLOAT; { `Lit (Float f) }
   | b = BOOL; { `Lit (Bool b) }
+  | s = STRING; { `Lit (String s) }
   | x = IDENT; { make_var x }
   | LPAREN; e = expr; RPAREN; { e }
   | LBRACE; fields = record_fields; RBRACE; {

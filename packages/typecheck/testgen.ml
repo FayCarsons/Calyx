@@ -71,7 +71,9 @@ let adt_of_spec spec : Term.t Term.sum_type =
 
 (** [D] with every parameter instantiated to [Int]. *)
 let inst_type spec : Term.t =
-  app_spine (`Var data_name) (List.init spec.n_params ~f:(fun _ -> (`Var int_name : Term.t)))
+  app_spine
+    (`Var data_name)
+    (List.init spec.n_params ~f:(fun _ -> (`Var int_name : Term.t)))
 ;;
 
 (** A closed constructor tree of type [inst_type spec]. *)
@@ -237,8 +239,9 @@ let record_proj_fn spec i : Term.t Term.declaration =
 
 (** Full record program: declaration, a literal constant, every projection. *)
 let record_program spec : Term.t Term.declaration list =
-  (record_decl_of_spec spec :: record_const spec (record_literal spec)
-   :: List.mapi spec.r_fields ~f:(fun i _ -> record_proj_fn spec i))
+  record_decl_of_spec spec
+  :: record_const spec (record_literal spec)
+  :: List.mapi spec.r_fields ~f:(fun i _ -> record_proj_fn spec i)
 ;;
 
 (* {1 Leak detection}
@@ -282,7 +285,7 @@ and pattern_clean : Term.t Term.pattern -> bool = function
 
 and literal_clean : Term.t Term.literal -> bool = function
   | Record fields -> List.for_all (Map.data fields) ~f:term_clean
-  | Int _ | UInt _ | Float _ | Bool _ -> true
+  | _ -> true
 ;;
 
 let decl_clean : Term.t Term.declaration -> bool = function
@@ -354,8 +357,7 @@ let arb_record_with_index =
   let gen =
     let open QCheck.Gen in
     gen_record_spec
-    >>= fun spec ->
-    int_bound (List.length spec.r_fields - 1) >>= fun i -> return (spec, i)
+    >>= fun spec -> int_bound (List.length spec.r_fields - 1) >>= fun i -> return (spec, i)
   in
   QCheck.make
     ~print:(fun (s, i) -> Printf.sprintf "%s, field %d" (print_record_spec s) i)

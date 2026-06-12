@@ -61,6 +61,7 @@ let literal (pp_inner : 'a -> document) : 'a Term.literal -> document = function
   | Term.Int n -> string (Int.to_string n)
   | Term.UInt n -> string (Int.to_string n) ^^ char 'u'
   | Term.Float f -> string (Float.to_string f)
+  | Term.String s -> string s
   | Term.Bool b -> string (if b then "True" else "False")
   | Term.Record fields ->
     let field (name, value) = ident name ^^ equals ^^ pp_inner value in
@@ -71,6 +72,7 @@ let literal_simple : _ Term.literal -> document = function
   | Term.Int n -> string (Int.to_string n)
   | Term.UInt n -> string (Int.to_string n) ^^ char 'u'
   | Term.Float f -> string (Float.to_string f)
+  | Term.String s -> string s
   | Term.Bool b -> string (if b then "True" else "False")
   | Term.Record _ -> string "{...}"
 ;;
@@ -259,9 +261,7 @@ let declaration ?(opts = Options.default) : Term.cst Term.declaration -> documen
                 params)
     in
     let field_doc (fname, fty) = ident fname ^^ colon ^^ cst ~opts fty in
-    let fields_doc =
-      separate (comma_sep ^^ hardline) (List.map ~f:field_doc fields)
-    in
+    let fields_doc = separate (comma_sep ^^ hardline) (List.map ~f:field_doc fields) in
     group
       (string "data "
        ^^ ident name

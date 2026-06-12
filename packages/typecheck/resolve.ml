@@ -181,6 +181,7 @@ let resolve_expr : traversal -> t -> t * traversal =
     | UInt n -> UInt n, state
     | Float x -> Float x, state
     | Bool b -> Bool b, state
+    | String s -> String s, state
     | Record fields ->
       let state, fields =
         Map.to_alist fields

@@ -219,6 +219,7 @@ module Javascript : Codegen.M = struct
   let int = string_of_int
   let uint n = string_of_int n ^ "u"
   let float = string_of_float
+  let string = sprintf "\"%s\""
   let bool = string_of_bool
   let app f x = Printf.sprintf "%s(%s)" (name f) x
   let let_ id value body = Printf.sprintf "const %s = %s;\n%s" (name id) value body
@@ -272,6 +273,7 @@ module Javascript : Codegen.M = struct
     | Lit (Int n) -> int n
     | Lit (UInt n) -> uint n
     | Lit (Float x) -> float x
+    | Lit (String s) -> string s
     | Lit (Bool b) -> bool b
     | Lit (Record fields) ->
       let compiled_fields = Map.map ~f:compile_expr fields in
@@ -306,6 +308,7 @@ module Javascript : Codegen.M = struct
        | Int n -> Printf.sprintf "%s === %d" scrut n
        | UInt n -> Printf.sprintf "%s === %d" scrut n
        | Float x -> Printf.sprintf "%s === %f" scrut x
+       | String s -> sprintf "%s === %s" scrut (string s)
        | Bool b -> Printf.sprintf "%s === %s" scrut (bool b)
        | Record _ -> failwith "Record literal patterns not supported")
 
@@ -420,9 +423,7 @@ let%test_module "js emission invariants" =
       | Some js ->
         (not (String.contains js '$'))
         && (not (String.is_substring js ~substring:"_tag"))
-        && String.is_substring
-             js
-             ~substring:(Ident.Intern.lookup Testgen.record_ctor)
+        && String.is_substring js ~substring:(Ident.Intern.lookup Testgen.record_ctor)
         && List.for_alli spec.Testgen.r_fields ~f:(fun i _ ->
           String.is_substring
             js

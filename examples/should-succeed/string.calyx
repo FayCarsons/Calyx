@@ -1,0 +1,10 @@
+def main () -> String do 
+  let foo = "foo" in
+  let bar = "bar" in
+
+  let n = 420 in
+
+  if n > 0 then 
+    foo 
+  else 
+    bar

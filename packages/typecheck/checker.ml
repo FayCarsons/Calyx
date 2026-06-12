@@ -59,7 +59,8 @@ let rec eval : Term.t -> Term.value =
      | Int n -> `Lit (Int n)
      | UInt n -> `Lit (UInt n)
      | Float x -> `Lit (Float x)
-     | Bool b -> `Lit (Bool b))
+     | Bool b -> `Lit (Bool b)
+     | String s -> `Lit (String s))
   | `Meta m -> `Neutral (NMeta m)
   | `Err e -> `Err e
   | `RecordType { fields; tail } ->
@@ -92,7 +93,8 @@ and pattern : Term.t Term.pattern -> Term.value Term.pattern = function
      | Int n -> PLit (Int n)
      | UInt n -> PLit (UInt n)
      | Float x -> PLit (Float x)
-     | Bool b -> PLit (Bool b))
+     | Bool b -> PLit (Bool b)
+     | String s -> PLit (String s))
   | PRec fields -> PRec (List.map fields ~f:(fun (ident, pat) -> ident, pattern pat))
 
 (* Extract bindings from a pattern given the scrutinee type *)
@@ -137,7 +139,8 @@ let rec quote : int -> Term.value -> Term.t =
      | Int n -> `Lit (Int n)
      | UInt n -> `Lit (UInt n)
      | Float x -> `Lit (Float x)
-     | Bool b -> `Lit (Bool b))
+     | Bool b -> `Lit (Bool b)
+     | String s -> `Lit (String s))
   | `RecordType { fields; tail } ->
     let fields = Map.map ~f:(quote lvl) fields in
     let tail = Option.map ~f:(quote lvl) tail in
@@ -362,6 +365,7 @@ and infer_lit : Term.t Term.literal -> Term.value * Term.t Term.literal = functi
   | Int n -> `Neutral (NVar (0, Intern.intern "Int")), Int n
   | UInt n -> `Neutral (NVar (0, Intern.intern "UInt")), UInt n
   | Float x -> `Neutral (NVar (0, Intern.intern "Float")), Float x
+  | String s -> `Neutral (NVar (0, Intern.intern "String")), String s
   | Bool b -> `Neutral (NVar (0, Intern.intern "Bool")), Bool b
   | Record fields ->
     let fields = Map.map fields ~f:infer in
@@ -422,11 +426,17 @@ and infer_proj : Term.t -> Ident.t -> Term.value * Term.t =
             | `Pi (Explicit, _, dom, cod) ->
               if Ident.equal name field
               then dom
-              else walk ((name, dom) :: acc) (Context.lift_r (cod (proj name scrut_val))) rest
+              else
+                walk
+                  ((name, dom) :: acc)
+                  (Context.lift_r (cod (proj name scrut_val)))
+                  rest
             | other ->
               Context.fail (`Expected ("constructor field type", Term.show_value other)))
        in
-       let field_ty = walk [] (instantiate ctor.Context.ctor_type spine_args) field_names in
+       let field_ty =
+         walk [] (instantiate ctor.Context.ctor_type spine_args) field_names
+       in
        field_ty, `Proj (annotated, field)
      | None ->
        let field_type = `Neutral (NMeta (Context.fresh_meta ())) in
@@ -850,8 +860,7 @@ let infer_toplevel : Term.t Term.declaration list -> Term.t Term.declaration lis
             Context.tell_error e;
             decl :: go rest
           | Ok () ->
-            elaborate_sum_decl ~record_fields:field_names sum (fun () ->
-              decl :: go rest)))
+            elaborate_sum_decl ~record_fields:field_names sum (fun () -> decl :: go rest)))
     | [] -> []
   in
   go program
@@ -966,9 +975,7 @@ let%test_module "datatype invariants" =
         |> List.map ~f:Testgen.ctor_name
       in
       let decl = Term.SumDecl (Testgen.adt_of_spec spec) in
-      let names l =
-        List.map l ~f:Intern.lookup |> List.sort ~compare:String.compare
-      in
+      let names l = List.map l ~f:Intern.lookup |> List.sort ~compare:String.compare in
       let flagged =
         match check_program [ decl; Testgen.match_fn spec idxs ] with
         | Ok _, state ->
@@ -1014,7 +1021,8 @@ let%test_module "datatype invariants" =
         { ident = Intern.intern name
         ; params = []
         ; constructors =
-            Ident.Map.of_alist_exn [ Intern.intern ctor, [ (`Var Testgen.int_name : Term.t) ] ]
+            Ident.Map.of_alist_exn
+              [ Intern.intern ctor, [ (`Var Testgen.int_name : Term.t) ] ]
         ; position = Testgen.no_pos
         }
       in
@@ -1165,18 +1173,20 @@ let%test_module "datatype invariants" =
       match check_program (Testgen.record_program spec) with
       | Ok _, state ->
         List.is_empty state.Context.errors
-        && (match Map.find state.Context.definitions Testgen.record_name with
-            | Some (Context.Data info) ->
-              Option.equal
-                (List.equal Ident.equal)
-                info.Context.record_fields
-                (Some (List.map ~f:Intern.intern [ "rf2"; "rf1"; "rf0" ]))
-              && (match info.Context.ctors with
-                  | [ ctor ] ->
-                    Ident.equal ctor.Context.ctor_name Testgen.record_ctor
-                    && ctor.Context.arity = 3
-                  | _ -> false)
-            | _ -> false)
+        &&
+          (match Map.find state.Context.definitions Testgen.record_name with
+          | Some (Context.Data info) ->
+            Option.equal
+              (List.equal Ident.equal)
+              info.Context.record_fields
+              (Some (List.map ~f:Intern.intern [ "rf2"; "rf1"; "rf0" ]))
+            &&
+              (match info.Context.ctors with
+              | [ ctor ] ->
+                Ident.equal ctor.Context.ctor_name Testgen.record_ctor
+                && ctor.Context.arity = 3
+              | _ -> false)
+          | _ -> false)
       | Error _, _ -> false
     ;;
 

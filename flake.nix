@@ -41,7 +41,7 @@
               merlin
               fzf
 
-              nodejs-slim_latest
+              deno
 
               # OCaml libs
               nottui

@@ -212,7 +212,7 @@ module Javascript : Codegen.M = struct
       ]
   ;;
 
-  let execute = Some "node"
+  let execute = Some "deno run -A"
   let extension = "js"
   let native_infix = List.map ~f:Intern.intern [ "+"; "-"; "*"; "/"; "<"; ">" ]
   let var = name

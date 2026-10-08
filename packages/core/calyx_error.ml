@@ -84,7 +84,9 @@ let show : t -> string =
     Printf.sprintf
       "Record literal does not match '%s'\n%s\n"
       (lookup datatype)
-      (String.concat ~sep:"\n" (part "missing fields" missing @ part "extra fields" extra))
+      (String.concat
+         ~sep:"\n"
+         (part "missing fields" missing @ part "extra fields" extra))
   | `Todo -> "Unimplemented feature"
 ;;
 

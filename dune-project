@@ -43,7 +43,7 @@
 (package
  (name calyx-trace)
  (synopsis "Calyx inference tracing and interactive trace viewer")
- (depends ocaml dune core core_unix calyx nottui notty))
+ (depends ocaml dune core core_unix calyx nottui notty-community))
 
 (package
  (name calyx-lsp)

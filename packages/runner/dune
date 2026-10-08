@@ -2,13 +2,7 @@
  (name calyx_runner)
  (public_name calyx.runner)
  (wrapped false)
- (libraries
-  core
-  unix
-  calyx_core
-  calyx_typecheck
-  calyx_codegen
-  calyx_trace)
+ (libraries core unix calyx_core calyx_typecheck calyx_codegen calyx_trace)
  (preprocess
   (pps
    ppx_jane

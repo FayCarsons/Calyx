@@ -2,7 +2,7 @@
  (name calyx_viewer)
  (public_name calyx-trace.viewer)
  (wrapped false)
- (libraries core calyx_core calyx_trace notty nottui nottui-unix)
+ (libraries core calyx_core calyx_trace notty-community nottui nottui-unix)
  (preprocess
   (pps
    ppx_jane

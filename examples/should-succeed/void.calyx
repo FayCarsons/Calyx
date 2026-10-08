@@ -1,7 +1,10 @@
 data Void
 
+-- Because Void is uninhabited, this function is impossible to call
 def absurdish (v : Void) -> Int do
   0
 
+
 def main () -> Int do
+  -- guaranteed to have been picked randomly
   7

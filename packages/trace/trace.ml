@@ -177,7 +177,9 @@ let handle_with_tree : f:(unit -> 'a) -> 'a * node option =
             | Enter judgement ->
               Some
                 (fun (k : (a, _) continuation) ->
-                  let node = { data = Pending judgement; children = Dynarray.create () } in
+                  let node =
+                    { data = Pending judgement; children = Dynarray.create () }
+                  in
                   (match Stack.top stack with
                    | Some parent -> Dynarray.add_last parent.children node
                    | None -> root := Some node);

@@ -116,7 +116,7 @@ let is_bound : Ident.t -> bool = fun ident -> Option.is_some (lookup ident)
 let under_scope : type a. scope -> (unit -> a) -> a =
   fun sc f ->
   let open Effect.Deep in
-  try f () with 
+  try f () with
   | effect Scope, k -> continue k sc
 ;;
 
@@ -240,7 +240,9 @@ let trace : type i o. (i, o) Trace.stage -> i -> Lexing.position -> (unit -> o) 
   let source_location =
     Trace.{ file = here.Lexing.pos_fname; line = here.Lexing.pos_lnum }
   in
-  let judgement = Trace.{ stage; focus; context; location = scope'.pos; source_location } in
+  let judgement =
+    Trace.{ stage; focus; context; location = scope'.pos; source_location }
+  in
   match Trace.enter judgement with
   | Abort -> raise Trace.Trace_aborted
   | _ ->
@@ -271,28 +273,32 @@ let run
     { meta_gen = 0; errors = []; constraints = []; definitions = Ident.Map.empty }
   in
   let comp =
-    match (under_scope init_scope f) with
-    | x -> (fun st -> Ok x, st)
+    match under_scope init_scope f with
+    | x -> fun st -> Ok x, st
     | exception Fail e ->
       fun st ->
         let st = { st with errors = e :: st.errors } in
         Error st.errors, st
-    | effect (Tell_error e), k -> fun st ->
-        continue k () { st with errors = e :: st.errors }
-    | effect (Tell_constraint c), k -> fun st ->
-        continue k () { st with constraints = c :: st.constraints }
-    | effect Take_constraints, k -> fun st -> 
-        continue k st.constraints { st with constraints = [] }
-    | effect Has_constraints, k -> fun st -> 
-        continue k (not @@ List.is_empty st.constraints) st
-    | effect (Fresh_meta level), k -> fun st -> 
-        let meta = Term.Meta.make ~id:st.meta_gen ~level () in 
+    | effect Tell_error e, k ->
+      fun st -> continue k () { st with errors = e :: st.errors }
+    | effect Tell_constraint c, k ->
+      fun st -> continue k () { st with constraints = c :: st.constraints }
+    | effect Take_constraints, k ->
+      fun st -> continue k st.constraints { st with constraints = [] }
+    | effect Has_constraints, k ->
+      fun st -> continue k (not @@ List.is_empty st.constraints) st
+    | effect Fresh_meta level, k ->
+      fun st ->
+        let meta = Term.Meta.make ~id:st.meta_gen ~level () in
         continue k meta { st with meta_gen = succ st.meta_gen }
-    | effect (Define (ident, defn)), k ->  fun st -> 
-        continue k () { st with definitions = Map.set st.definitions ~key:ident ~data:defn }
-    | effect (Lookup_defn ident),k -> fun st -> 
-      continue k (Map.find st.definitions ident) st
-
+    | effect Define (ident, defn), k ->
+      fun st ->
+        continue
+          k
+          ()
+          { st with definitions = Map.set st.definitions ~key:ident ~data:defn }
+    | effect Lookup_defn ident, k ->
+      fun st -> continue k (Map.find st.definitions ident) st
   in
   comp init_state
 ;;

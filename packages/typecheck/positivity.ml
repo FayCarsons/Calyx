@@ -14,11 +14,9 @@ let rec occurs (name : Ident.t) : Term.t -> bool = function
   | `Ann (x, t) -> occurs name x || occurs name t
   | `Pos (_, t) -> occurs name t
   | `RecordType { fields; tail } ->
-    List.exists (Map.data fields) ~f:(occurs name)
-    || Option.exists tail ~f:(occurs name)
+    List.exists (Map.data fields) ~f:(occurs name) || Option.exists tail ~f:(occurs name)
   | `Self (_, body) -> occurs name body
-  | `Infix { left; op; right } ->
-    occurs name left || occurs name op || occurs name right
+  | `Infix { left; op; right } -> occurs name left || occurs name op || occurs name right
   | _ -> false
 ;;
 
@@ -72,9 +70,9 @@ let%test_module "positivity" =
         Map.update adt.constructors (Testgen.ctor_name i) ~f:(fun fields ->
           negative_field :: Option.value fields ~default:[])
       in
-      (match check { adt with constructors } with
-       | Error (`Positivity _) -> true
-       | _ -> false)
+      match check { adt with constructors } with
+      | Error (`Positivity _) -> true
+      | _ -> false
     ;;
   end)
 ;;

@@ -1,7 +1,17 @@
 open Core
 
 module M = struct
-  module Ident = struct
+  module Ident : sig
+    type t = private int64
+
+    val equal : t -> t -> bool
+    val compare : t -> t -> int
+    val hash : t -> int
+    val succ : t -> t
+    val of_int : int -> t
+    val to_int : t -> int
+    val default : t
+  end = struct
     type t = (int64[@opaque])
 
     let equal = Int64.equal
@@ -10,6 +20,7 @@ module M = struct
     let succ : t -> t = Int64.succ
     let of_int : int -> t = Int64.of_int
     let to_int : t -> int = Int64.to_int_exn
+    let default = 0L
   end
 
   module Intern : sig
@@ -52,10 +63,9 @@ module M = struct
     ;;
 
     let default () =
-      { string_to_ident =
-          Hashtbl.create ~growth_allowed:true ~size:1024 (module String)
+      { string_to_ident = Hashtbl.create ~growth_allowed:true ~size:1024 (module String)
       ; ident_to_string = Dynarray.create ()
-      ; counter = 0L
+      ; counter = Ident.default
       }
     ;;
 
@@ -179,8 +189,7 @@ let%test_unit "different strings get different ids" =
   @@ QCheck.Test.make
        ~count:100
        ~name:"different strings get different ids"
-       QCheck.(
-         pair (string_size (Gen.int_range 1 20)) (string_size (Gen.int_range 1 20)))
+       QCheck.(pair (string_size (Gen.int_range 1 20)) (string_size (Gen.int_range 1 20)))
        (fun (s1, s2) ->
           if String.equal s1 s2
           then true

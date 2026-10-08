@@ -6,18 +6,18 @@ open Core
 module Fresh = struct
   open Effect.Deep
 
-  type _ Effect.t += Get : string -> string Effect.t 
+  type _ Effect.t += Get : string -> string Effect.t
 
   let get pref = Effect.perform (Get pref)
 
   let handle : type a. (unit -> a) -> a =
     fun f ->
-    let run : int -> a = 
-      match f () with 
-      | x -> Fun.const x 
-      | effect (Get prefix), k -> fun counter ->
-          continue k (prefix ^ string_of_int counter) (succ counter)
-    in 
+    let run : int -> a =
+      match f () with
+      | x -> Fun.const x
+      | effect Get prefix, k ->
+        fun counter -> continue k (prefix ^ string_of_int counter) (succ counter)
+    in
     run 0
   ;;
 end
@@ -233,9 +233,8 @@ module CtorTags = struct
 
   let handle (ctor_tags : (int * int) Ident.Map.t) (f : unit -> 'a) : 'a =
     let open Effect.Deep in
-    try f () with 
-    | effect (Lookup name), k -> 
-        continue k (Map.find ctor_tags name)
+    try f () with
+    | effect Lookup name, k -> continue k (Map.find ctor_tags name)
   ;;
 end
 

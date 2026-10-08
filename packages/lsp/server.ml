@@ -9,11 +9,11 @@ type t = { by_position : Term.value Interval_tree.Positions.t }
 let process_file : string -> t = assert false
 let diagnostics : t -> Lsp.Types.Diagnostic.t list = assert false
 
-class lsp_server =
+class lsp_server ~sw =
   object (self)
     inherit Linol_eio.Jsonrpc2.server
     val buffers : (Lsp.Types.DocumentUri.t, t) Hashtbl.t = Hashtbl.create 64
-    method spawn_query_handler f = Linol_eio.spawn f
+    method spawn_query_handler f = Linol_eio.spawn ~sw f
 
     method
       private _on_doc
@@ -37,8 +37,8 @@ class lsp_server =
 
 let run () =
   Eio_main.run (fun env ->
-    Eio.Switch.run (fun _ ->
-      let s = new lsp_server in
+    Eio.Switch.run (fun sw ->
+      let s = new lsp_server ~sw in
       let server = Linol_eio.Jsonrpc2.create_stdio ~env s in
       let task () =
         let shutdown () = s#get_status = `ReceivedExit in
